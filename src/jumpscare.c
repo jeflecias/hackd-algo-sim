@@ -103,6 +103,7 @@ void jumpscare_trigger(App *a){
     a->scare.input[0] = 0; a->scare.inlen = 0;
     a->scare.result = 0;
     gen_puzzle(a);
+    audio_sfx(SFX_SKULL, 0);
 }
 
 void jumpscare_update(App *a, double dt){
@@ -117,6 +118,7 @@ void jumpscare_update(App *a, double dt){
             strcpy(a->scare.res1, "TOO SLOW.");
             strcpy(a->scare.res2, "the parasite feeds.");
             a->scare.phase = 2; a->scare.phase_time = 0;
+            audio_sfx(SFX_WRONG, 0);
         }
     } else { /* phase 2: result */
         if (a->scare.phase_time > RESULT_PHASE_MS){
@@ -142,9 +144,11 @@ static void submit_answer(App *a){
         ok = (strcmp(norm, exp) == 0);
     }
     a->scare.result = ok;
-    if (ok){ a->kills += 0; strcpy(a->scare.res1,"CORRECT."); strcpy(a->scare.res2,"access restored."); }
+    if (ok){ a->kills += 0; strcpy(a->scare.res1,"CORRECT."); strcpy(a->scare.res2,"access restored.");
+             audio_sfx(SFX_CORRECT, 0); }
     else   { a->kills += 1; strcpy(a->scare.res1,"WRONG.");
-             snprintf(a->scare.res2,64,"answer was: %s", a->scare.answer); }
+             snprintf(a->scare.res2,64,"answer was: %s", a->scare.answer);
+             audio_sfx(SFX_WRONG, 0); }
     a->scare.phase = 2; a->scare.phase_time = 0;
 }
 

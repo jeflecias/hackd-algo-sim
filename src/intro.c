@@ -89,11 +89,13 @@ void intro_update(App *a, double dt){
 
     switch (a->state){
     case ST_GLITCH_INTRO:
+        if ((rng_next(&a->rng) & 31) == 0) audio_sfx(SFX_GLITCH, 0.8f);  /* tearing static */
         if (a->state_time > GLITCH_MS){ a->state = ST_BOOT_INFECT; a->state_time = 0; }
         break;
     case ST_BOOT_INFECT:
         if (!term_busy(&a->term) && a->state_time > 800){
             a->state = ST_SKULL_REVEAL; a->state_time = 0;
+            audio_sfx(SFX_SKULL, 0);
         }
         break;
     case ST_SKULL_REVEAL:

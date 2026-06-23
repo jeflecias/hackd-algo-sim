@@ -21,7 +21,8 @@ static void print_help(App *a){
     term_print(t, COL_GREEN, "  man <algo>        explain an algorithm / concept");
     term_print(t, COL_GREEN, "  banner            redraw the logo");
     term_print(t, COL_GREEN, "  clear             wipe the screen");
-    term_print(t, COL_GREEN, "  data <module>     view / edit a dataset");
+    term_print(t, COL_GREEN, "  edit / data        open the live dataset editor (arrows + type)");
+    term_print(t, COL_GREEN, "  data <module> set  edit a dataset from the shell (power users)");
     term_print(t, COL_GREEN, "  selftest          verify algorithms vs textbook results");
     term_print(t, COL_GREEN, "  exit              terminate the parasite (also ESC)");
     term_print(t, COL_AMBER, "MODULE 4 - CPU SCHEDULING");
@@ -136,7 +137,10 @@ void cmd_execute(App *a, const char *line){
     } else if (!strcmp(cmd, "disk")){
         disk_run(a, rest);
     } else if (!strcmp(cmd, "data")){
-        data_run(a, rest);
+        if (rest[0]) data_run(a, rest);     /* power-user 'data <mod> set ...' */
+        else dataedit_open(a);              /* bare 'data' opens the editor */
+    } else if (!strcmp(cmd, "edit") || !strcmp(cmd, "editor")){
+        dataedit_open(a);
     } else if (!strcmp(cmd, "selftest")){
         selftest_run(a);
     } else if (!strcmp(cmd, "scare")){          /* debug trigger */

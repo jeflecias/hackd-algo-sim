@@ -23,13 +23,23 @@ static inline COLORREF to_cref(uint32_t c){
 }
 
 /* ---- framebuffer: a 32-bit top-down DIB section shared by GDI + our code ---- */
+#define FONT_MIN_PX  11
+#define FB_FONTCACHE 12
+
 typedef struct {
     HDC      memdc;
     HBITMAP  dib;
     uint32_t *px;   /* w*h pixels, row-major, top-down */
     int      w, h;
-    HFONT    font;  /* monospace */
-    int      ch_w, ch_h; /* character cell metrics */
+    HFONT    font;  /* base monospace */
+    int      ch_w, ch_h;   /* CURRENT active character cell metrics */
+    int      bch_w, bch_h; /* base font metrics */
+    int      base_fh;      /* base font pixel height */
+    /* on-demand font cache for true zoom (variable text size) */
+    HFONT    fcache[FB_FONTCACHE];
+    int      fpx[FB_FONTCACHE], fcw[FB_FONTCACHE], fch[FB_FONTCACHE];
+    int      nfont;
+    uint32_t *prev;        /* retained previous frame for phosphor persistence */
 } Framebuffer;
 
 /* ---- terminal model ---- */
@@ -79,6 +89,7 @@ typedef enum {
     ST_WELCOME,
     ST_TERMINAL,
     ST_ANIM,
+    ST_DATAEDIT,
     ST_JUMPSCARE,
     ST_QUIT
 } AppState;
@@ -192,6 +203,16 @@ typedef struct {
     int         busy_anim;    /* true while pend queue is draining an animation */
 
     Anim        anim;         /* active algorithm visualizer (ST_ANIM) */
+
+    /* interactive data editor (ST_DATAEDIT) */
+    struct {
+        int      tab;         /* 0 sched, 1 mem, 2 vmem, 3 disk */
+        int      field;       /* selected field index within tab */
+        int      typing;      /* mid-keystroke entry into inbuf */
+        char     inbuf[16];
+        double   glitch;      /* ms of write-glitch left after a commit */
+        double   t;           /* local clock for caret/skull */
+    } edit;
 } App;
 
 extern App g_app;
@@ -221,9 +242,14 @@ void fb_fill_rect(Framebuffer *fb, int x, int y, int w, int h, uint32_t c);
 void fb_text(Framebuffer *fb, int x, int y, const char *s, uint32_t c);
 void fb_blit_shot(Framebuffer *fb, const uint32_t *shot);
 void fb_frame(Framebuffer *fb, int x, int y, int w, int h, uint32_t c);  /* outline */
+void fb_box(Framebuffer *fb, int x, int y, int w, int h, uint32_t c);    /* TUI frame + corner brackets */
 void fb_text_center(Framebuffer *fb, int cx, int y, const char *s, uint32_t c);
 void fb_hline(Framebuffer *fb, int x, int y, int w, uint32_t c);
 void fb_vline(Framebuffer *fb, int x, int y, int h, uint32_t c);
+/* variable-size text (true zoom): select a cached font sized px high, restore with base */
+int  fb_font_for(Framebuffer *fb, int px);  /* selects font, updates ch_w/ch_h, returns ch_h */
+void fb_font_base(Framebuffer *fb);         /* restore base font + metrics */
+void fb_text_sm(Framebuffer *fb, int x, int y, const char *s, uint32_t c); /* one-off small label */
 /* glitch primitives operate on current fb contents */
 void gfx_scanlines(Framebuffer *fb, int strength);
 void gfx_rgb_split(Framebuffer *fb, int dx);
@@ -231,6 +257,11 @@ void gfx_slice_tear(Framebuffer *fb, uint64_t *rng, int amount, int bands);
 void gfx_noise_blocks(Framebuffer *fb, uint64_t *rng, int count, int maxsz);
 void gfx_invert_band(Framebuffer *fb, int y, int h);
 void gfx_vignette(Framebuffer *fb);
+/* horror-hacker aesthetic primitives */
+void gfx_phosphor(Framebuffer *fb, int fade);                 /* CRT persistence trail (fade 0..100) */
+void gfx_datamosh(Framebuffer *fb, uint64_t *rng, int x, int y, int w, int h);  /* corruption bloom in a rect */
+void gfx_jitter(Framebuffer *fb, uint64_t *rng, int amp);     /* horizontal signal jitter */
+void gfx_hexdump(Framebuffer *fb, uint64_t *rng, int x, int y, int w, int h);   /* decorative fake memory dump */
 
 /* ---- terminal.c ---- */
 void term_init(Terminal *t);
@@ -265,6 +296,24 @@ void jumpscare_key_special(App *a, int vk);
 
 /* ---- screenshot.c ---- */
 uint32_t *screenshot_capture(int w, int h);
+
+/* ---- dataedit.c (interactive data editor, ST_DATAEDIT) ---- */
+void dataedit_open(App *a);
+void dataedit_update(App *a, double dt);
+void dataedit_render(App *a);
+void dataedit_key_char(App *a, char c);
+void dataedit_key_special(App *a, int vk);
+
+/* ---- audio.c (procedural synth: tones/noise/drone, no asset files) ---- */
+enum {
+    SFX_KEY=0, SFX_BOOT, SFX_PAGEFAULT, SFX_HIT, SFX_SEEK, SFX_SWITCH,
+    SFX_ALLOC, SFX_NOFIT, SFX_SKULL, SFX_CORRECT, SFX_WRONG, SFX_GLITCH, SFX_DECRYPT
+};
+void audio_init(void);
+void audio_update(void);     /* call once per frame to refill stream buffers */
+void audio_shutdown(void);
+void audio_sfx(int id, float param);   /* param: 0..1 (e.g. pitch for SEEK) */
+void audio_drone(float tension);       /* 0..1 sustained dread bed */
 
 /* ---- anim.c (algorithm visualizer) ---- */
 void anim_begin(App *a, AnimKind kind, const char *title, const char *subtitle);

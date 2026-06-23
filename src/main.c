@@ -26,10 +26,33 @@ static void update(double dt){
         anim_update(a, dt);
         a->scare_at += dt;                 /* freeze the jumpscare countdown */
         break;
+    case ST_DATAEDIT:
+        dataedit_update(a, dt);            /* freezes the countdown itself */
+        break;
     case ST_JUMPSCARE:
         jumpscare_update(a, dt);
         break;
     default: break;
+    }
+
+    /* drive the procedural dread bed by state */
+    {
+        double lvl = 0.18;
+        switch (a->state){
+        case ST_TERMINAL:     lvl = 0.15; break;
+        case ST_ANIM:         lvl = 0.35; break;
+        case ST_DATAEDIT:     lvl = 0.30; break;
+        case ST_GLITCH_INTRO:
+        case ST_BOOT_INFECT:  lvl = 0.42; break;
+        case ST_SKULL_REVEAL: lvl = 0.72; break;
+        case ST_JUMPSCARE:
+            lvl = (a->scare.phase == 1)
+                ? 0.45 + 0.50 * (1.0 - a->scare.time_left / 30000.0)  /* rises as timer drains */
+                : 0.85;
+            break;
+        default: lvl = 0.20; break;
+        }
+        audio_drone((float)lvl);
     }
 }
 
@@ -47,6 +70,9 @@ static void render(void){
         break;
     case ST_ANIM:
         anim_render(a);
+        break;
+    case ST_DATAEDIT:
+        dataedit_render(a);
         break;
     case ST_JUMPSCARE:
         jumpscare_render(a);
@@ -67,6 +93,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp){
         if (wp >= 32 && wp < 127){
             if (a->state == ST_JUMPSCARE) jumpscare_key_char(a, (char)wp);
             else if (a->state == ST_TERMINAL) term_key_char(a, (char)wp);
+            else if (a->state == ST_DATAEDIT) dataedit_key_char(a, (char)wp);
         }
         return 0;
     case WM_KEYDOWN:
@@ -76,6 +103,11 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp){
         if (a->state == ST_ANIM){
             if (wp == VK_ESCAPE) anim_exit(a);                  /* ESC -> back to shell */
             else anim_key(a, (int)wp);
+            return 0;
+        }
+        if (a->state == ST_DATAEDIT){
+            if (wp == VK_ESCAPE){ a->state = ST_TERMINAL; a->state_time = 0; } /* ESC -> shell */
+            else dataedit_key_special(a, (int)wp);
             return 0;
         }
         if (wp == VK_ESCAPE){ a->state = ST_QUIT; PostQuitMessage(0); return 0; }
@@ -101,6 +133,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmd, int show){
     data_reset();
     a->rng = (uint64_t)now_ms() ^ (uint64_t)GetTickCount64() ^ 0xDEADBEEFCAFEull;
 
+    /* become DPI-aware so SM_CXSCREEN reports TRUE physical pixels (no DWM
+       upscaling/blur) and our framebuffer matches the monitor exactly */
+    SetProcessDPIAware();
+
     int sw = GetSystemMetrics(SM_CXSCREEN);
     int sh = GetSystemMetrics(SM_CYSCREEN);
 
@@ -125,6 +161,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmd, int show){
 
     if (!fb_create(&a->fb, sw, sh)) return 2;
     term_init(&a->term);
+    audio_init();
     a->state = ST_GLITCH_INTRO;
     a->scare_at = 1e18;   /* not scheduled until the shell is reached */
 
@@ -149,10 +186,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmd, int show){
 
         update(dt);
         render();
+        audio_update();                   /* refill streaming sound buffers */
 
         Sleep(6);                         /* ~ up to 60-ish fps */
     }
 done:
+    audio_shutdown();
     ShowCursor(TRUE);
     fb_destroy(&a->fb);
     if (a->shot) free(a->shot);

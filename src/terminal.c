@@ -72,6 +72,7 @@ void term_update(App *a, double dt){
         while (t->pend_head != t->pend_tail && t->pend_timer <= 0 && guard < 64){
             PendLine *pl = &t->pend[t->pend_head];
             add_line(t, pl->color, pl->text);
+            if (pl->text[0]) audio_sfx(SFX_BOOT, 0);   /* data-chatter blip per line */
             t->pend_head = (t->pend_head + 1) % TERM_PENDMAX;
             if (t->pend_head != t->pend_tail)
                 t->pend_timer += t->pend[t->pend_head].delay_ms;
@@ -126,9 +127,17 @@ void term_render(App *a){
     fb_fill_rect(fb, 0, fb->h - status_h, fb->w, status_h, 0x00101810);
     char sb[256];
     snprintf(sb, sizeof(sb),
-        " [ DEADLOCK v6.6.6 ]  modules:4-7 loaded  victims:%d  type 'help'  |  ESC=panic-exit",
+        " [ DEADLOCK v6.6.6 ]  modules:4-7 loaded  victims:%d  type 'help' or 'edit'  |  ESC=panic-exit",
         a->kills);
     fb_text(fb, 8, sy, sb, COL_DGREEN);
+    /* live-intrusion HUD on the right */
+    int cw = fb->ch_w;
+    char ex[40]; snprintf(ex, sizeof(ex), "EXFIL %lu KB", (unsigned long)(a->now_ms * 0.131));
+    fb_text(fb, fb->w - cw*30, sy, ex, COL_DGREEN);
+    if (t->caret_on){
+        fb_fill_rect(fb, fb->w - cw*14, sy+3, cw, cw, COL_RED);
+        fb_text(fb, fb->w - cw*12, sy, "LIVE INTRUSION", COL_RED);
+    }
 
     /* subtle scanlines for CRT feel */
     gfx_scanlines(fb, 88);
@@ -152,6 +161,7 @@ void term_key_char(App *a, char c){
     if (c >= 32 && c < 127 && t->inlen < TERM_INPUTMAX - 1){
         t->input[t->inlen++] = c;
         t->input[t->inlen] = 0;
+        audio_sfx(SFX_KEY, 0);
     }
 }
 

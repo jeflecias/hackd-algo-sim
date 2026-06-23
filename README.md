@@ -28,7 +28,7 @@ Operating Systems modules through an animated, glitchy **simulated Kali shell**.
 
 - **Windows** (Vista+ / `_WIN32_WINNT=0x0601`, i.e. Windows 7+)
 - **MinGW-W64 GCC** (`gcc`)
-- Links against **`gdi32`** and **`user32`** (standard Windows libs).
+- Links against **`gdi32`**, **`user32`**, and **`winmm`** (standard Windows libs).
 
 ---
 
@@ -38,7 +38,7 @@ Operating Systems modules through an animated, glitchy **simulated Kali shell**.
 # from the repo root:
 gcc -O2 -Wall -Isrc -D_WIN32_WINNT=0x0601 \
     src/*.c src/modules/*.c \
-    -o deadlock.exe -mwindows -lgdi32 -luser32
+    -o deadlock.exe -mwindows -lgdi32 -luser32 -lwinmm
 ```
 
 …or just:
@@ -65,10 +65,12 @@ make
 | --- | --- |
 | Command list | type `help` (or `help <topic>` for `sched`/`mem`/`vmem`/`disk`) |
 | Algorithm explainer | `man <algo>` |
-| Edit datasets | `data <module> set ...` |
+| **Edit datasets (GUI)** | type `edit` (or bare `data`) — full-screen interactive editor |
+| Edit datasets (shell) | `data <module> set ...` (power users) |
 | Force a jumpscare | `scare` |
 | Visualizer keys | `Space` play/pause, `←/→` single-step, `Esc` back to shell |
-| Quit instantly | `Ctrl+Q` (or `Esc` outside the visualizer) |
+| **Editor keys** | `↑/↓` field, `←/→` ±1, `0-9` type a value, `Tab` switch module, `Enter` run, `Esc` shell |
+| Quit instantly | `Ctrl+Q` (or `Esc` outside the visualizer/editor) |
 
 ---
 
@@ -88,6 +90,15 @@ make
   pauses, `←/→` single-step, `Esc` returns to the shell, and the jumpscare
   countdown freezes while you watch.
 - ✅ **Built-in self-test** verifies every algorithm against the textbook.
+- 🛠️ **Full-screen data editor** (`edit`) — a glitchy "live kernel-structure editor"
+  to change processes / regions / reference strings / disk queues with the arrow keys
+  and number keys, then `Enter` to instantly run the visualizer. No command syntax to memorize.
+- 🔊 **Procedural synth audio** — every sound is generated at runtime (no asset files):
+  keyclicks, a detuned page-fault buzz, pitch-mapped disk-seek blips, a skull sting, and a
+  sustained dread drone with a **heartbeat that accelerates** as the 30-second timer drains.
+- 🔎 **Zoom-to-fit visualizers** — panels measure themselves against the screen and pick a
+  font size so nothing clips or overlaps; very large datasets auto-pan a viewport that
+  follows the playback cursor (with a `>> window x–y <<` note) instead of becoming unreadable.
 
 ---
 
@@ -173,7 +184,9 @@ hackd-algo-sim/
 │   ├── terminal.c     # terminal model + typewriter queue + caret
 │   ├── commands.c     # command parse/dispatch + help/man
 │   ├── intro.c        # glitch intro + fake-infection boot
-│   ├── anim.c         # full-screen algorithm visualizer (ST_ANIM)
+│   ├── anim.c         # full-screen algorithm visualizer (ST_ANIM) + zoom-to-fit layout
+│   ├── dataedit.c     # full-screen interactive data editor (ST_DATAEDIT)
+│   ├── audio.c        # procedural synth + mixer streamed via waveOut (no assets)
 │   ├── skull.c        # ASCII/box-drawing skull renderer
 │   ├── jumpscare.c    # random skull + 30s OS quiz + resume
 │   ├── util.c         # RNG + clock
@@ -193,7 +206,9 @@ hackd-algo-sim/
 
 ## Notes
 
-- **No audio yet** — the horror atmosphere is purely visual for now.
+- **Procedural audio** is synthesized live in `src/audio.c` via `waveOut` (linked through
+  `winmm`). There are **no audio files** in the repo — tones, noise, sweeps and the drone are
+  generated in code. If no audio device can be opened, the engine silently no-ops.
 - The desktop screenshot is captured **once** at startup and only used as an
   in-game texture; it is never saved to disk or sent anywhere.
 
