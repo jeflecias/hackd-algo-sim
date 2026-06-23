@@ -127,44 +127,30 @@ static void sim_rr(SchedData *s, SResult *R, int q){
     finalize(R,s);
 }
 
-/* ---- output: animated execution trace + Gantt + metrics ---- */
+/* ---- capture the computed schedule into the graphical visualizer ---- */
 static void emit(App *a, SchedData *s, SResult *R, const char *name){
-    Terminal *t=&a->term;
-    term_print(t, COL_CYAN, "=== CPU SCHEDULING : %s ===", name);
-    /* animated trace */
-    for (int k=0;k<R->nseg;k++){
-        char bars[40]; int w=R->seg_b[k]-R->seg_a[k]; if(w>32)w=32; int j;
-        for(j=0;j<w;j++)bars[j]='#'; bars[j]=0;
-        if (R->seg_pid[k]<0)
-            term_queue(t,90,COL_GRAY,  "  t=%2d  --IDLE--   %-32s (%d->%d)", R->seg_a[k], bars, R->seg_a[k],R->seg_b[k]);
-        else
-            term_queue(t,150,COL_GREEN,"  t=%2d  >> P%-2d     %-32s (%d->%d)",
-                       R->seg_a[k], R->seg_pid[k], bars, R->seg_a[k], R->seg_b[k]);
-    }
-    /* compact gantt */
-    char g[TERM_MAXLINE]="GANTT: |"; int p=(int)strlen(g);
-    for(int k=0;k<R->nseg;k++){
-        if(R->seg_pid[k]<0) p+=snprintf(g+p,TERM_MAXLINE-p," ## %d-%d |",R->seg_a[k],R->seg_b[k]);
-        else p+=snprintf(g+p,TERM_MAXLINE-p," P%d %d-%d |",R->seg_pid[k],R->seg_a[k],R->seg_b[k]);
-        if(p>TERM_MAXLINE-24){snprintf(g+p,TERM_MAXLINE-p," ...");break;}
-    }
-    term_queue(t,250,COL_AMBER,"%s",g);
-    /* metrics table */
-    term_queue(t,200,COL_CYAN, "  ID  AT  BT  Pr  Comp  TAT  Wait  Resp");
-    int swt=0,stat=0,sbt=0,mk=0;
+    Anim *an=&a->anim;
+    memset(&an->sched, 0, sizeof an->sched);
+    an->sched.n = s->n;
+    int mk=0;
     for(int i=0;i<s->n;i++){
-        term_queue(t,80,COL_GREEN,"  P%-2d %3d %3d %3d  %4d %4d  %4d  %4d",
-            s->id[i],s->arrival[i],s->burst[i],s->prio[i],
-            R->completion[i],R->turnaround[i],R->waiting[i],R->response[i]);
-        swt+=R->waiting[i]; stat+=R->turnaround[i]; sbt+=s->burst[i];
-        if(R->completion[i]>mk)mk=R->completion[i];
+        an->sched.id[i]=s->id[i]; an->sched.at[i]=s->arrival[i];
+        an->sched.bt[i]=s->burst[i]; an->sched.pr[i]=s->prio[i];
+        an->sched.comp[i]=R->completion[i]; an->sched.tat[i]=R->turnaround[i];
+        an->sched.wait[i]=R->waiting[i]; an->sched.resp[i]=R->response[i];
+        if(R->completion[i]>mk) mk=R->completion[i];
     }
-    double awt=(double)swt/s->n, atat=(double)stat/s->n;
-    double util = mk? 100.0*sbt/mk : 0;
-    double thru = mk? (double)s->n/mk : 0;
-    term_queue(t,200,COL_AMBER,"  avg waiting = %.2f    avg turnaround = %.2f", awt, atat);
-    term_queue(t,120,COL_AMBER,"  CPU util = %.1f%%   throughput = %.3f proc/unit   makespan = %d",
-               util, thru, mk);
+    int nseg = R->nseg>512?512:R->nseg;
+    an->sched.nseg=nseg;
+    for(int k=0;k<nseg;k++){ an->sched.seg_pid[k]=R->seg_pid[k];
+        an->sched.seg_a[k]=R->seg_a[k]; an->sched.seg_b[k]=R->seg_b[k]; }
+    an->sched.makespan = mk;
+
+    /* short title = name up to " (" */
+    char tshort[64]; int j=0;
+    while(name[j] && !(name[j]==' '&&name[j+1]=='(') && j<40){ tshort[j]=name[j]; j++; }
+    tshort[j]=0;
+    anim_begin(a, AV_SCHED, tshort, "CPU SCHEDULING");
 }
 
 /* ---- MLFQ: Q0 q=4, Q1 q=8, Q2 FCFS; demote on quantum expiry; preemptive ---- */
@@ -188,8 +174,8 @@ static void sched_mlfq(App *a){
         else if(slice[pick]>=q[ml] && ml<2){ lvl[pick]=ml+1; slice[pick]=0; seq[pick]=seqc++; cur=-1; }
     }
     finalize(&R,s); emit(a,s,&R,"MLFQ (Q0 q=4, Q1 q=8, Q2 FCFS)");
-    term_queue(&a->term, 150, COL_DGREEN,
-        "  note: new jobs enter Q0; a job using its quantum is demoted to a lower queue.");
+    anim_summary(a, COL_DGREEN,
+        "note: new jobs enter Q0; a job using its quantum is demoted a level.");
 }
 
 /* ---- MLQ: fixed queues by priority, preemptive between queues ----
@@ -221,9 +207,9 @@ static void sched_mlq(App *a){
         add_seg(&R,s->id[pick],t,t+1); rem[pick]--; slice[pick]++; t++; cur=pick;
         if(rem[pick]==0){ fin[pick]=1; done++; R.completion[pick]=t; cur=-1; }
     }
-    finalize(&R,s); emit(a,s,&R,"MLQ (Q0=RR2 prio1, Q1=FCFS prio2-3, Q2=SJF prio>=4)");
-    term_queue(&a->term, 150, COL_DGREEN,
-        "  note: higher-priority queues fully preempt lower ones (fixed-priority).");
+    finalize(&R,s); emit(a,s,&R,"MLQ (Q0=RR2 Q1=FCFS Q2=SJF)");
+    anim_summary(a, COL_DGREEN,
+        "note: higher-priority queues fully preempt lower ones (fixed-priority).");
 }
 
 void sched_run(App *a, const char *args){

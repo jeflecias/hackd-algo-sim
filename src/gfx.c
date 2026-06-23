@@ -83,6 +83,21 @@ void fb_blit_shot(Framebuffer *fb, const uint32_t *shot){
     memcpy(fb->px, shot, (size_t)fb->w * fb->h * 4);
 }
 
+void fb_hline(Framebuffer *fb, int x, int y, int w, uint32_t c){ fb_fill_rect(fb,x,y,w,1,c); }
+void fb_vline(Framebuffer *fb, int x, int y, int h, uint32_t c){ fb_fill_rect(fb,x,y,1,h,c); }
+
+void fb_frame(Framebuffer *fb, int x, int y, int w, int h, uint32_t c){
+    fb_hline(fb, x, y, w, c);
+    fb_hline(fb, x, y+h-1, w, c);
+    fb_vline(fb, x, y, h, c);
+    fb_vline(fb, x+w-1, y, h, c);
+}
+
+void fb_text_center(Framebuffer *fb, int cx, int y, const char *s, uint32_t c){
+    int x = cx - (int)strlen(s) * fb->ch_w / 2;
+    fb_text(fb, x, y, s, c);
+}
+
 /* ----------------- glitch primitives ----------------- */
 
 void gfx_scanlines(Framebuffer *fb, int strength){

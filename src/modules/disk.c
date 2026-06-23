@@ -55,26 +55,17 @@ int disk_total(int mode,int start,const int*req,int n,int down,int dmin,int dmax
 }
 
 static void emit(App *a, int mode, const char *name, int down){
-    DiskData *d=&g_data.disk; Terminal *t=&a->term;
+    DiskData *d=&g_data.disk;
     int path[64],isr[64],pc;
     int total=disk_compute(mode,d->start,d->req,d->n,down,d->dmin,d->dmax,path,isr,&pc);
 
-    term_print(t, COL_CYAN, "=== DISK SCHEDULING : %s ===", name);
-    char qs[256]={0}; int p=0; p+=snprintf(qs+p,256-p,"  queue:");
-    for(int i=0;i<d->n;i++) p+=snprintf(qs+p,256-p," %d",d->req[i]);
-    term_queue(t,120,COL_AMBER,"%s   (head start=%d, dir=%s)",qs,d->start,down?"down":"up");
-
-    int run=0;
-    for(int i=1;i<pc;i++){
-        int mv=iabs(path[i]-path[i-1]); run+=mv;
-        int span=d->dmax-d->dmin; if(span<1)span=1;
-        int col=path[i]*40/(span?span:1); /* position marker 0..40 */
-        char axis[44]; for(int k=0;k<41;k++)axis[k]=(k==col)?'O':'-'; axis[41]=0;
-        term_queue(t, 200, isr[i]?COL_GREEN:COL_GRAY,
-            "  %3d -> %3d  |%s|  +%-3d  %s (run %d)",
-            path[i-1], path[i], axis, mv, isr[i]?"serve":"     ", run);
-    }
-    term_queue(t,260,COL_RED,"  >> TOTAL HEAD MOVEMENT = %d tracks", total);
+    Anim *an=&a->anim; memset(&an->disk,0,sizeof an->disk);
+    an->disk.start=d->start; an->disk.dmin=d->dmin; an->disk.dmax=d->dmax;
+    an->disk.n=d->n; for(int i=0;i<d->n && i<32;i++) an->disk.req[i]=d->req[i];
+    an->disk.np = pc>64?64:pc;
+    for(int i=0;i<an->disk.np;i++){ an->disk.path[i]=path[i]; an->disk.isreq[i]=isr[i]; }
+    an->disk.total=total;
+    anim_begin(a, AV_DISK, name, "DISK SCHEDULING");
 }
 
 void disk_run(App *a, const char *args){

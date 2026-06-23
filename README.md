@@ -67,7 +67,8 @@ make
 | Algorithm explainer | `man <algo>` |
 | Edit datasets | `data <module> set ...` |
 | Force a jumpscare | `scare` |
-| Quit instantly | `Esc` or `Ctrl+Q` |
+| Visualizer keys | `Space` play/pause, `←/→` single-step, `Esc` back to shell |
+| Quit instantly | `Ctrl+Q` (or `Esc` outside the visualizer) |
 
 ---
 
@@ -81,6 +82,11 @@ make
   interrupts you with a **30-second OS quiz**. Answer correctly to "survive";
   your shell session resumes exactly where it left off.
 - 🧠 **Four hidden OS modules** disguised as hacker tools (see below).
+- 📊 **Animated algorithm visualizer** — running any `sched`/`mem`/`vmem`/`disk`
+  command pops a **full-screen horror/hacker visualization** (Gantt chart, frame
+  grid, disk-head sweep, memory map) with a live kernel-trace panel. `Space`
+  pauses, `←/→` single-step, `Esc` returns to the shell, and the jumpscare
+  countdown freezes while you watch.
 - ✅ **Built-in self-test** verifies every algorithm against the textbook.
 
 ---
@@ -167,6 +173,7 @@ hackd-algo-sim/
 │   ├── terminal.c     # terminal model + typewriter queue + caret
 │   ├── commands.c     # command parse/dispatch + help/man
 │   ├── intro.c        # glitch intro + fake-infection boot
+│   ├── anim.c         # full-screen algorithm visualizer (ST_ANIM)
 │   ├── skull.c        # ASCII/box-drawing skull renderer
 │   ├── jumpscare.c    # random skull + 30s OS quiz + resume
 │   ├── util.c         # RNG + clock

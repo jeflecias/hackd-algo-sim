@@ -4,14 +4,19 @@
 #include <stdio.h>
 
 /* mode: 0 FIFO, 1 OPT, 2 LRU, 3 LFU, 4 MFU, 5 SECOND(clock).
-   if a != NULL, queue an animated trace. returns total page faults. */
+   if a != NULL, capture a per-reference snapshot into a->anim.vmem. returns page faults. */
 static int compute(App *a, int mode, const int *ref, int n, int F){
     int fr[16], load[16], last[16], cnt[16], rb[16];
     for(int i=0;i<F;i++){ fr[i]=-1; load[i]=last[i]=cnt[i]=rb[i]=0; }
     int filled=0, faults=0, clock=0;
 
+    if(a){
+        a->anim.vmem.n=n; a->anim.vmem.frames=F;
+        for(int i=0;i<n && i<64;i++) a->anim.vmem.ref[i]=ref[i];
+    }
+
     for(int i=0;i<n;i++){
-        int r=ref[i], hit=-1;
+        int r=ref[i], hit=-1, victim_pg=-1;
         for(int k=0;k<F;k++) if(fr[k]==r){ hit=k; break; }
         if(hit>=0){
             last[hit]=i; if(mode==3||mode==4) cnt[hit]++; rb[hit]=1;
@@ -39,15 +44,14 @@ static int compute(App *a, int mode, const int *ref, int n, int F){
                     while(rb[clock]==1){ rb[clock]=0; clock=(clock+1)%F; }
                     slot=clock; clock=(clock+1)%F;
                 }
+                victim_pg = fr[slot];   /* page being evicted */
             }
             fr[slot]=r; load[slot]=i; last[slot]=i; cnt[slot]=1; rb[slot]=1;
         }
-        if(a){
-            char box[64]={0}; int p=0; p+=snprintf(box+p,64-p,"[");
-            for(int k=0;k<F;k++){ if(fr[k]<0) p+=snprintf(box+p,64-p," ."); else p+=snprintf(box+p,64-p," %d",fr[k]); }
-            p+=snprintf(box+p,64-p," ]");
-            term_queue(&a->term, 170, hit>=0?COL_DGREEN:COL_GREEN,
-                "  ref %2d  %-22s %s  (faults=%d)", r, box, hit>=0?"hit ":"FAULT", faults);
+        if(a && i<64){
+            a->anim.vmem.hit[i] = (hit>=0)?1:0;
+            a->anim.vmem.victim[i] = victim_pg;
+            for(int k=0;k<F && k<10;k++) a->anim.vmem.snap[i][k]=fr[k];
         }
     }
     return faults;
@@ -64,38 +68,38 @@ static const char *NAME(int m){
 }
 
 static void run_mode(App *a, int mode){
-    VmemData *v=&g_data.vmem; Terminal *t=&a->term;
-    term_print(t, COL_CYAN, "=== PAGE REPLACEMENT : %s  (%d frames) ===", NAME(mode), v->frames);
-    char rs[256]={0}; int p=0; p+=snprintf(rs+p,256-p,"  ref string:");
-    for(int i=0;i<v->n;i++) p+=snprintf(rs+p,256-p," %d",v->ref[i]);
-    term_queue(t,120,COL_AMBER,"%s",rs);
+    VmemData *v=&g_data.vmem;
+    memset(&a->anim.vmem, 0, sizeof a->anim.vmem);
     int f=compute(a,mode,v->ref,v->n,v->frames);
-    double rate=100.0*f/v->n;
-    term_queue(t,220,COL_RED,"  >> total page faults = %d / %d  (fault rate %.1f%%)",f,v->n,rate);
+    a->anim.vmem.faults=f;
+    anim_begin(a, AV_VMEM, NAME(mode), "PAGE REPLACEMENT");
 }
 
 static void belady_demo(App *a){
-    Terminal *t=&a->term;
     int rs[12]={1,2,3,4,1,2,5,1,2,3,4,5};
-    term_print(t, COL_CYAN, "=== BELADY'S ANOMALY (FIFO) ===");
-    term_queue(t,120,COL_AMBER,"  ref: 1 2 3 4 1 2 5 1 2 3 4 5");
+    memset(&a->anim.vmem, 0, sizeof a->anim.vmem);
     int f3=compute(a,0,rs,12,3);
-    term_queue(t,200,COL_GREEN,"  FIFO with 3 frames -> %d faults",f3);
+    a->anim.vmem.faults=f3;
     int f4=compute(NULL,0,rs,12,4);
-    term_queue(t,200,COL_RED,  "  FIFO with 4 frames -> %d faults  (MORE frames, MORE faults!)",f4);
-    term_queue(t,160,COL_DGREEN,"  that anomaly is why LRU/OPT (stack algorithms) are preferred.");
+    anim_begin(a, AV_VMEM, "Beladys Anomaly", "FIFO: more frames, more faults");
+    anim_summary(a, COL_GREEN, "FIFO 3 frames -> %d faults", f3);
+    anim_summary(a, COL_RED,   "FIFO 4 frames -> %d faults  (anomaly!)", f4);
+    anim_summary(a, COL_DGREEN, "stack algorithms (LRU/OPT) never suffer this.");
 }
 
 static void eat_demo(App *a, const char *args){
-    Terminal *t=&a->term;
     double pf=10.0, ma=5.0, prob=0.2;  /* pf ms, ma us, p */
     sscanf(args,"%*s %lf %lf %lf",&prob,&ma,&pf);
     double eat=(1.0-prob)*ma + prob*(pf*1000.0); /* us */
-    term_print(t, COL_CYAN, "=== EFFECTIVE ACCESS TIME (demand paging) ===");
-    term_queue(t,140,COL_GREEN,"  EAT = (1-p)*ma + p*page_fault_time");
-    term_queue(t,140,COL_GREEN,"  p=%.2f   ma=%.0f us   page-fault=%.0f ms (%.0f us)",prob,ma,pf,pf*1000.0);
-    term_queue(t,220,COL_AMBER,"  EAT = (%.2f)*%.0f + %.2f*%.0f = %.0f us",
-               1.0-prob, ma, prob, pf*1000.0, eat);
+    Anim *an=&a->anim; memset(&an->calc,0,sizeof an->calc);
+    snprintf(an->calc.line[0],96,"EAT = (1-p)*ma + p*page_fault_time");
+    snprintf(an->calc.line[1],96,"p          = %.2f", prob);
+    snprintf(an->calc.line[2],96,"ma         = %.0f us (memory access)", ma);
+    snprintf(an->calc.line[3],96,"page-fault = %.0f ms = %.0f us", pf, pf*1000.0);
+    snprintf(an->calc.line[4],96,"EAT = (%.2f)*%.0f + %.2f*%.0f", 1.0-prob, ma, prob, pf*1000.0);
+    an->calc.nline=5;
+    snprintf(an->calc.result,96,"%.0f us", eat);
+    anim_begin(a, AV_CALC, "EAT", "Effective Access Time (demand paging)");
 }
 
 void vmem_run(App *a, const char *args){

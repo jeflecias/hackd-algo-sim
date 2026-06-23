@@ -22,6 +22,10 @@ static void update(double dt){
         if (!a->busy_anim && a->now_ms >= a->scare_at)
             jumpscare_trigger(a);          /* deferred automatically while an anim runs */
         break;
+    case ST_ANIM:
+        anim_update(a, dt);
+        a->scare_at += dt;                 /* freeze the jumpscare countdown */
+        break;
     case ST_JUMPSCARE:
         jumpscare_update(a, dt);
         break;
@@ -40,6 +44,9 @@ static void render(void){
         break;
     case ST_TERMINAL:
         term_render(a);
+        break;
+    case ST_ANIM:
+        anim_render(a);
         break;
     case ST_JUMPSCARE:
         jumpscare_render(a);
@@ -63,10 +70,15 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp){
         }
         return 0;
     case WM_KEYDOWN:
-        if (wp == VK_ESCAPE){ a->state = ST_QUIT; PostQuitMessage(0); return 0; }
         if (wp == 'Q' && (GetKeyState(VK_CONTROL) & 0x8000)){
-            a->state = ST_QUIT; PostQuitMessage(0); return 0;
+            a->state = ST_QUIT; PostQuitMessage(0); return 0;   /* global panic quit */
         }
+        if (a->state == ST_ANIM){
+            if (wp == VK_ESCAPE) anim_exit(a);                  /* ESC -> back to shell */
+            else anim_key(a, (int)wp);
+            return 0;
+        }
+        if (wp == VK_ESCAPE){ a->state = ST_QUIT; PostQuitMessage(0); return 0; }
         if (a->state == ST_JUMPSCARE) jumpscare_key_special(a, (int)wp);
         else if (a->state == ST_TERMINAL) term_key_special(a, (int)wp);
         return 0;

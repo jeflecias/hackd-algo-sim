@@ -78,9 +78,85 @@ typedef enum {
     ST_SKULL_REVEAL,
     ST_WELCOME,
     ST_TERMINAL,
+    ST_ANIM,
     ST_JUMPSCARE,
     ST_QUIT
 } AppState;
+
+/* ---- algorithm visualizer (breakout state) ---- */
+typedef enum { AV_SCHED, AV_MEM, AV_VMEM, AV_DISK, AV_CALC } AnimKind;
+
+#define ANIM_TRACE_MAX 256
+#define ANIM_TRACE_W   80
+
+typedef struct {
+    AnimKind kind;
+    char     title[64];
+    char     subtitle[96];
+
+    /* playback */
+    int      phase;        /* 0 intro, 1 sim, 2 result(rest) */
+    double   phase_time;
+    double   clock;        /* fractional sim cursor (units or step index) */
+    double   clock_max;    /* sim end */
+    int      paused;
+    int      step_req;     /* +1 / -1 single-step request from keys */
+    double   flash;        /* ms left of a red event-flash */
+    double   glitch;       /* ms left of a glitch jolt */
+
+    /* kernel-trace ring (lines revealed over time) */
+    char     trace[ANIM_TRACE_MAX][ANIM_TRACE_W];
+    uint32_t trace_col[ANIM_TRACE_MAX];
+    double   trace_at[ANIM_TRACE_MAX];   /* clock value at which line appears */
+    int      ntrace;
+
+    /* compact summary pushed to the shell on exit */
+    char     summary[8][TERM_MAXLINE];
+    uint32_t summary_col[8];
+    int      nsummary;
+
+    /* ---- CPU scheduling ---- */
+    struct {
+        int n, id[16], at[16], bt[16], pr[16];
+        int nseg, seg_pid[512], seg_a[512], seg_b[512];
+        int comp[16], tat[16], wait[16], resp[16];
+        int makespan;
+    } sched;
+
+    /* ---- page replacement ---- */
+    struct {
+        int n, ref[64], frames;
+        int snap[64][10];   /* frame contents after step i (-1 empty) */
+        int hit[64];        /* 1 hit, 0 fault */
+        int victim[64];     /* page evicted at step i, -1 none */
+        int faults;
+    } vmem;
+
+    /* ---- disk scheduling ---- */
+    struct {
+        int start, dmin, dmax, n, req[32];
+        int np, path[64], isreq[64];
+        int total;
+    } disk;
+
+    /* ---- memory ---- */
+    struct {
+        int mode, nreg, reg[16];
+        int nstep, step_job[64], step_region[64], step_frag[64];
+        char step_jid[64];
+        int totfrag, used;
+        /* paging */
+        int paging, page_size, nconv;
+        int la[8], pg[8], doff[8], fr[8], pa[8];
+    } mem;
+
+    /* ---- calc board (swap/eat) ---- */
+    struct {
+        char line[8][96];
+        int  nline;
+        char result[96];
+    } calc;
+} Anim;
 
 typedef struct {
     HWND        hwnd;
@@ -114,6 +190,8 @@ typedef struct {
     } scare;
 
     int         busy_anim;    /* true while pend queue is draining an animation */
+
+    Anim        anim;         /* active algorithm visualizer (ST_ANIM) */
 } App;
 
 extern App g_app;
@@ -142,6 +220,10 @@ void fb_present(Framebuffer *fb, HDC dst);
 void fb_fill_rect(Framebuffer *fb, int x, int y, int w, int h, uint32_t c);
 void fb_text(Framebuffer *fb, int x, int y, const char *s, uint32_t c);
 void fb_blit_shot(Framebuffer *fb, const uint32_t *shot);
+void fb_frame(Framebuffer *fb, int x, int y, int w, int h, uint32_t c);  /* outline */
+void fb_text_center(Framebuffer *fb, int cx, int y, const char *s, uint32_t c);
+void fb_hline(Framebuffer *fb, int x, int y, int w, uint32_t c);
+void fb_vline(Framebuffer *fb, int x, int y, int h, uint32_t c);
 /* glitch primitives operate on current fb contents */
 void gfx_scanlines(Framebuffer *fb, int strength);
 void gfx_rgb_split(Framebuffer *fb, int dx);
@@ -183,6 +265,15 @@ void jumpscare_key_special(App *a, int vk);
 
 /* ---- screenshot.c ---- */
 uint32_t *screenshot_capture(int w, int h);
+
+/* ---- anim.c (algorithm visualizer) ---- */
+void anim_begin(App *a, AnimKind kind, const char *title, const char *subtitle);
+void anim_trace(App *a, double at_clock, uint32_t col, const char *fmt, ...);
+void anim_summary(App *a, uint32_t col, const char *fmt, ...);
+void anim_update(App *a, double dt);
+void anim_render(App *a);
+void anim_key(App *a, int vk);
+void anim_exit(App *a);
 
 /* ---- modules: each fills the terminal with a step animation + result ---- */
 void sched_run(App *a, const char *args);
