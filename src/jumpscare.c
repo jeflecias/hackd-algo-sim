@@ -8,6 +8,8 @@
 #define RESULT_PHASE_MS 1700.0
 #define PUZZLE_MS       30000.0
 
+static int s_stung = 0;   /* has the silence->skull sting fired for this scare? */
+
 /* normalize: keep [0-9a-z] only, lowercase */
 static void normalize(char *out, const char *in){
     int j = 0;
@@ -19,7 +21,10 @@ static void normalize(char *out, const char *in){
 }
 
 void jumpscare_schedule(App *a){
-    a->scare_at = a->now_ms + rng_range(&a->rng, 60000, 180000); /* 1-3 min */
+    /* the parasite feeds: scares come faster the more it has claimed */
+    int lo = 60000 - a->kills*7000;  if (lo < 18000) lo = 18000;
+    int hi = 180000 - a->kills*15000; if (hi < lo + 20000) hi = lo + 20000;
+    a->scare_at = a->now_ms + rng_range(&a->rng, lo, hi);
     a->scare_pending = 0;
 }
 
@@ -103,12 +108,16 @@ void jumpscare_trigger(App *a){
     a->scare.input[0] = 0; a->scare.inlen = 0;
     a->scare.result = 0;
     gen_puzzle(a);
-    audio_sfx(SFX_SKULL, 0);
+    /* sudden silence, THEN the sting (fired in update once the quiet lands) */
+    audio_silence(280);
+    gfx_phosphor_reset(&a->fb);
+    s_stung = 0;
 }
 
 void jumpscare_update(App *a, double dt){
     a->scare.phase_time += dt;
     if (a->scare.phase == 0){
+        if (!s_stung && a->scare.phase_time > 280){ audio_sfx(SFX_SKULL, 0); s_stung = 1; }
         if (a->scare.phase_time > SKULL_PHASE_MS){ a->scare.phase = 1; a->scare.phase_time = 0; }
     } else if (a->scare.phase == 1){
         a->scare.time_left -= dt;
@@ -178,6 +187,9 @@ void jumpscare_render(App *a){
         fb_text(fb, fb->w/2 - (int)strlen(m)*fb->ch_w/2, fb->h/2 + skull_height_px(fb)/2, m, COL_RED);
         if ((rng_next(&a->rng) & 1)) gfx_slice_tear(fb, &a->rng, 40, 4);
         gfx_rgb_split(fb, 4 + (rng_next(&a->rng)%6));
+        gfx_datamosh(fb, &a->rng, 0, 0, fb->w, fb->h);            /* heavy corruption */
+        if ((rng_next(&a->rng) & 7) == 0) gfx_invert_band(fb, 0, fb->h); /* full-frame invert flash */
+        gfx_phosphor(fb, 70);                                    /* searing CRT trails */
         gfx_scanlines(fb, 80);
         gfx_vignette(fb);
         return;

@@ -19,6 +19,20 @@ static void enter_boot(App *a){
         term_queue(t, 70, COL_DGREEN, "    pid %-5d  inject payload ... done  rss=%dK",
                    rng_range(r,200,9999), rng_range(r,64,8192));
     term_queue(t, 120, COL_GREEN, "[OK] page table walk complete  frames=%d", rng_range(r,128,2048));
+    /* randomized infection lines so each boot differs */
+    {
+        static const char *VAR[] = {
+            "[**] harvesting browser cookies ....... %d found",
+            "[**] keylogger hooked  WH_KEYBOARD_LL  tid=%d",
+            "[**] webcam handle acquired  /dev/video%d",
+            "[**] clipboard scraped  %d entries",
+            "[**] mic stream opened  %d kHz",
+            "[**] enumerating saved passwords ...... %d",
+        };
+        int a0 = rng_range(r,0,5), b0 = rng_range(r,0,5);
+        term_queue(t, 95, COL_AMBER, VAR[a0], rng_range(r,3,991));
+        if (b0 != a0) term_queue(t, 95, COL_AMBER, VAR[b0], rng_range(r,3,991));
+    }
     term_queue(t, 100, COL_RED,   "[!!] DISABLING DEFENDER ............ bypassed");
     term_queue(t, 100, COL_RED,   "[!!] DISABLING FIREWALL ........... bypassed");
     term_queue(t, 130, COL_AMBER, "[**] encrypting /home/user ...");
@@ -96,6 +110,7 @@ void intro_update(App *a, double dt){
         if (!term_busy(&a->term) && a->state_time > 800){
             a->state = ST_SKULL_REVEAL; a->state_time = 0;
             audio_sfx(SFX_SKULL, 0);
+            gfx_phosphor_reset(&a->fb);
         }
         break;
     case ST_SKULL_REVEAL:
@@ -146,6 +161,7 @@ void intro_render(App *a){
         fb_text(fb, x, fb->h/2 + skull_height_px(fb)/2 + fb->ch_h, laugh, COL_RED);
         if ((rng_next(&a->rng) & 3) == 0) gfx_slice_tear(fb, &a->rng, 24, 3);
         if ((rng_next(&a->rng) & 7) == 0) gfx_rgb_split(fb, 6);
+        gfx_phosphor(fb, 68);   /* the skull smears across the screen */
         gfx_scanlines(fb, 82);
         gfx_vignette(fb);
         break; }

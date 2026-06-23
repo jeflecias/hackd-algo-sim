@@ -259,9 +259,12 @@ void gfx_invert_band(Framebuffer *fb, int y, int h);
 void gfx_vignette(Framebuffer *fb);
 /* horror-hacker aesthetic primitives */
 void gfx_phosphor(Framebuffer *fb, int fade);                 /* CRT persistence trail (fade 0..100) */
+void gfx_phosphor_reset(Framebuffer *fb);                     /* drop the trail buffer (on state change) */
 void gfx_datamosh(Framebuffer *fb, uint64_t *rng, int x, int y, int w, int h);  /* corruption bloom in a rect */
 void gfx_jitter(Framebuffer *fb, uint64_t *rng, int amp);     /* horizontal signal jitter */
+void gfx_brightness(Framebuffer *fb, int pct);               /* global dim (flicker / darkness) */
 void gfx_hexdump(Framebuffer *fb, uint64_t *rng, int x, int y, int w, int h);   /* decorative fake memory dump */
+void fb_garble(char *dst, const char *src, uint64_t *rng, int pct);  /* glitch-corrupt a string */
 
 /* ---- terminal.c ---- */
 void term_init(Terminal *t);
@@ -307,13 +310,15 @@ void dataedit_key_special(App *a, int vk);
 /* ---- audio.c (procedural synth: tones/noise/drone, no asset files) ---- */
 enum {
     SFX_KEY=0, SFX_BOOT, SFX_PAGEFAULT, SFX_HIT, SFX_SEEK, SFX_SWITCH,
-    SFX_ALLOC, SFX_NOFIT, SFX_SKULL, SFX_CORRECT, SFX_WRONG, SFX_GLITCH, SFX_DECRYPT
+    SFX_ALLOC, SFX_NOFIT, SFX_SKULL, SFX_CORRECT, SFX_WRONG, SFX_GLITCH, SFX_DECRYPT,
+    SFX_BREATH, SFX_DRIP, SFX_WHISPER, SFX_SCAN
 };
 void audio_init(void);
 void audio_update(void);     /* call once per frame to refill stream buffers */
 void audio_shutdown(void);
 void audio_sfx(int id, float param);   /* param: 0..1 (e.g. pitch for SEEK) */
 void audio_drone(float tension);       /* 0..1 sustained dread bed */
+void audio_silence(float ms);          /* hard-mute everything for ms (sudden-silence sting) */
 
 /* ---- anim.c (algorithm visualizer) ---- */
 void anim_begin(App *a, AnimKind kind, const char *title, const char *subtitle);

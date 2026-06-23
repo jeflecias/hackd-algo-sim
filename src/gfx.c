@@ -268,6 +268,38 @@ void gfx_datamosh(Framebuffer *fb, uint64_t *rng, int x, int y, int w, int h){
     }
 }
 
+/* global brightness multiply (for flicker / darkness pulses) */
+void gfx_brightness(Framebuffer *fb, int pct){
+    if (pct >= 100) return;
+    if (pct < 0) pct = 0;
+    int n = fb->w * fb->h;
+    uint32_t *p = fb->px;
+    for (int i = 0; i < n; i++){
+        uint32_t c = p[i];
+        int r = ((c>>16)&0xFF)*pct/100, g = ((c>>8)&0xFF)*pct/100, b = (c&0xFF)*pct/100;
+        p[i] = RGB32(r,g,b);
+    }
+}
+
+/* drop the phosphor trail buffer so the next gfx_phosphor reseeds cleanly
+   (call when switching to a state that uses trails, to avoid cross-state ghosting) */
+void gfx_phosphor_reset(Framebuffer *fb){
+    if (fb->prev){ free(fb->prev); fb->prev = NULL; }
+}
+
+/* copy src->dst, randomly corrupting non-space glyphs (Zalgo-lite glitch text) */
+void fb_garble(char *dst, const char *src, uint64_t *rng, int pct){
+    static const char G[] = "#@%&$!?*<>/\\|01010";
+    int i = 0;
+    for (; src[i] && i < TERM_MAXLINE-1; i++){
+        if (src[i] != ' ' && (int)(rng_next(rng)%100) < pct)
+            dst[i] = G[rng_next(rng) % (int)(sizeof(G)-1)];
+        else
+            dst[i] = src[i];
+    }
+    dst[i] = 0;
+}
+
 /* whole-frame horizontal jitter (signal can't hold lock) */
 void gfx_jitter(Framebuffer *fb, uint64_t *rng, int amp){
     int dx = rng_range(rng, -amp, amp);

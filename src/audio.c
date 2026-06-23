@@ -29,8 +29,9 @@ static unsigned  aseed = 0x13572468u;
 
 /* drone / heartbeat state */
 static double dr_t = 0, dr_tgt = 0;
-static double dph1 = 0, dph2 = 0, dph3 = 0, dlfo = 0, hbt = 0;
+static double dph1 = 0, dph2 = 0, dph3 = 0, dlfo = 0, hbt = 0, dbr = 0;
 static unsigned hiss_rng = 0x2468ace0u;
+static double mute_ms = 0;   /* hard-mute countdown for sudden-silence stings */
 
 static double frand(unsigned *s){
     unsigned x = *s; x ^= x<<13; x ^= x>>17; x ^= x<<5; *s = x;
@@ -86,7 +87,9 @@ static double drone(double dt){
         dph3+=hf*dt; if(dph3>=1)dph3-=1;
         s += sin(TAU*dph3)*0.03*ten;
     }
-    s += frand(&hiss_rng)*0.008;          /* tape hiss bed */
+    dbr+=dt/4.0; if(dbr>=1)dbr-=1;         /* ~4s breathing cycle */
+    double breath=sin(TAU*dbr)*0.5+0.5;
+    s += frand(&hiss_rng)*(0.006+0.022*breath*ten);  /* breath-modulated hiss bed */
 
     /* heartbeat: faster as tension rises */
     hbt += dt;
@@ -100,6 +103,7 @@ static double drone(double dt){
 }
 
 static double render_sample(double dt){
+    if(mute_ms>0){ mute_ms-=dt*1000.0; return 0.0; }   /* sudden silence */
     double mix=0;
     for(int i=0;i<NVOICE;i++){
         Voice *v=&voices[i];
@@ -172,6 +176,11 @@ void audio_drone(float tension){
     dr_tgt=tension;
 }
 
+void audio_silence(float ms){
+    if(!aok) return;
+    mute_ms=ms;
+}
+
 void audio_sfx(int id, float param){
     if(!aok) return;
     if(param<0)param=0;
@@ -234,6 +243,21 @@ void audio_sfx(int id, float param){
     case SFX_DECRYPT:
         for(int i=0;i<6;i++)
             spawn(1,800+i*220,0,0.03,0.05,0.001,0.02,i*0.04);
+        break;
+    case SFX_BREATH:                     /* slow filtered-noise inhale/exhale */
+        spawn(3,0,0,2.0,0.045,0.85,0.95,0);
+        break;
+    case SFX_DRIP:                       /* sparse sine pluck in the quiet */
+        spawn(0,720,560,0.12,0.09,0.002,0.10,0);
+        spawn(0,300,0,0.16,0.05,0.002,0.13,0.01);
+        break;
+    case SFX_WHISPER:                    /* voice-like filtered-noise burst */
+        spawn(3,0,0,0.50,0.05,0.15,0.22,0);
+        spawn(3,0,0,0.36,0.035,0.10,0.18,0.12);
+        break;
+    case SFX_SCAN:                       /* creepy rising scanning ticks */
+        for(int i=0;i<5;i++)
+            spawn(1,180+i*55,0,0.035,0.045,0.001,0.02,i*0.06);
         break;
     default: break;
     }

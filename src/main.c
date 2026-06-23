@@ -35,6 +35,27 @@ static void update(double dt){
     default: break;
     }
 
+    /* ambient dread: sparse drips/whispers, and a fake "reading your files" scan */
+    {
+        static double ambient_at = 4500.0, scan_at = 11000.0;
+        if (a->state == ST_TERMINAL || a->state == ST_ANIM || a->state == ST_DATAEDIT){
+            if (a->now_ms >= ambient_at){
+                audio_sfx((rng_next(&a->rng) & 1) ? SFX_DRIP : SFX_WHISPER, 0);
+                ambient_at = a->now_ms + rng_range(&a->rng, 4000, 11000);
+            }
+        }
+        if (a->state == ST_TERMINAL && !a->busy_anim && a->now_ms >= scan_at){
+            static const char *FILES[] = {
+                "/home/user/Documents/taxes.pdf", "/home/user/.ssh/id_rsa",
+                "/home/user/Pictures/IMG_0666.jpg", "/home/user/.bash_history",
+                "/etc/shadow", "/home/user/Desktop/diary.txt", "/home/user/wallet.dat" };
+            term_print(&a->term, COL_DGREEN, "[scan] reading %s ... done",
+                       FILES[rng_next(&a->rng) % 7]);
+            audio_sfx(SFX_SCAN, 0);
+            scan_at = a->now_ms + rng_range(&a->rng, 9000, 20000);
+        }
+    }
+
     /* drive the procedural dread bed by state */
     {
         double lvl = 0.18;

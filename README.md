@@ -99,6 +99,12 @@ make
 - 🔎 **Zoom-to-fit visualizers** — panels measure themselves against the screen and pick a
   font size so nothing clips or overlaps; very large datasets auto-pan a viewport that
   follows the playback cursor (with a `>> window x–y <<` note) instead of becoming unreadable.
+- 🖥️ **DPI-precise fullscreen** — the window/framebuffer matches the monitor's true physical
+  resolution 1:1 (no DWM upscaling/blur) via `SetProcessDPIAware()`.
+- 👁️ **Deeper dread** — power-flicker/darkness pulses, occasional glyph corruption, a fake
+  "reading your files" scan, breathing + drip + whisper ambience, a **sudden-silence-then-sting**
+  jumpscare with CRT phosphor trails, randomized infection boots, and **dynamic difficulty**
+  (scares come faster the more the parasite claims). All gated so the data stays legible.
 
 ---
 

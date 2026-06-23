@@ -19,6 +19,14 @@ static const char *TAUNTS[5]={
 static int clampi(int v,int lo,int hi){ return v<lo?lo:(v>hi?hi:v); }
 static int imin(int a,int b){ return a<b?a:b; }
 
+/* draw a label but keep it inside [xlo,xhi] so it never clips off-panel */
+static void draw_label_clamped(Framebuffer *fb,int x,int y,const char *s,uint32_t c,int xlo,int xhi){
+    int w=(int)strlen(s)*fb->ch_w;
+    if(x+w>xhi) x=xhi-w;
+    if(x<xlo) x=xlo;
+    fb_text(fb,x,y,s,c);
+}
+
 /* raw font px needed so `count` cells of `chars` glyphs each fit in `avail` px
    (may be < FONT_MIN_PX, which signals "switch to a scrolling viewport"). */
 static int need_px_w(Framebuffer *fb,int avail,int count,int chars){
@@ -334,6 +342,8 @@ static void postfx(App *a){
     /* rare subliminal skull flash (one frame) - the parasite blinks into view */
     if(an->flash<=0 && (rng_next(&a->rng)&2047)==0)
         skull_render(fb,fb->w/2,fb->h/2,(int)(a->state_time/100),COL_RED);
+    /* occasional power flicker / darkness pulse */
+    if((rng_next(&a->rng)&511)<3) gfx_brightness(fb,52+(int)(rng_next(&a->rng)%28));
     gfx_scanlines(fb,86);
     gfx_vignette(fb);
 }
@@ -403,13 +413,14 @@ static void render_sched(App *a){
             int a0=an->sched.seg_a[k];
             if(a0>tc) continue;
             int lx=mx+(int)(a0*sc);
-            if(lx-lastx<scw) continue;
             char tn[8]; snprintf(tn,8,"%d",a0);
-            fb_text(fb,lx-scw/2,gy+gh+2,tn,COL_DGREEN);
+            int lw=(int)strlen(tn)*scw;
+            if(lx-lastx<lw+scw) continue;
+            draw_label_clamped(fb,lx-lw/2,gy+gh+2,tn,COL_DGREEN,mx,mx+mw);
             lastx=lx;
         }
-        { char tn[8]; snprintf(tn,8,"%d",(int)tc);
-          fb_text(fb,hx-scw/2,gy+gh+2,tn,COL_WHITE); }
+        { char tn[8]; snprintf(tn,8,"%d",(int)tc); int lw=(int)strlen(tn)*scw;
+          draw_label_clamped(fb,hx-lw/2,gy+gh+2,tn,COL_WHITE,mx,mx+mw); }
         fb_font_base(fb);
     }
     y=gy+gh+ch+8;
@@ -569,7 +580,7 @@ static void render_disk(App *a){
     #define TRK2X(t) (mx + ((t)-lo)*mw/(hi-lo))
 
     int y=my;
-    char th[48]; snprintf(th,48,"DISK TRACKS (%d..%d)",lo,hi);
+    char th[64]; snprintf(th,64,"DISK TRACKS (%d..%d)   minimize seek time",lo,hi);
     fb_text(fb,mx,y,th,COL_CYAN);
     int ry=y+ch*2;
     fb_hline(fb,mx,ry,mw,COL_DGREEN);
@@ -588,15 +599,18 @@ static void render_disk(App *a){
         int lastx=-100000;
         for(int i=0;i<nn;i++){
             int x=TRK2X(idx[i]);
-            if(x-lastx<scw) continue;
-            char s[8]; snprintf(s,8,"%d",idx[i]); fb_text(fb,x-scw,ry-sch-6,s,COL_DGREEN);
+            char s[8]; snprintf(s,8,"%d",idx[i]);
+            int lw=(int)strlen(s)*scw;
+            if(x-lastx < lw+scw) continue;      /* keep a full label-width + gap apart */
+            draw_label_clamped(fb,x-lw/2,ry-sch-6,s,COL_DGREEN,mx,mx+mw);  /* centre, keep on-panel */
             lastx=x;
         }
         fb_font_base(fb);
     }
     int hpos=an->disk.path[cur]; int hx=TRK2X(hpos);
     fb_fill_rect(fb,hx-3,ry-10,7,20,COL_RED);
-    char hl[40]; snprintf(hl,40,"head @ %d",hpos); fb_text(fb,hx-cw*2,ry+10,hl,COL_WHITE);
+    char hl[40]; snprintf(hl,40,"head @ %d",hpos);
+    draw_label_clamped(fb,hx-cw*2,ry+10,hl,COL_WHITE,mx,mx+mw);
     y=ry+ch*3;
 
     /* zigzag position-vs-step graph (geometric: scales freely) */
@@ -659,14 +673,20 @@ static void render_mem(App *a){
 
     /* fits: vertical memory column (geometric: scales to mh) */
     int cur=clampi((int)an->clock,0,an->mem.nstep-1);
-    fb_text(fb,mx,my,"MAIN MEMORY (regions)",COL_CYAN);
+    fb_text(fb,mx,my,"MAIN MEMORY (MFT regions)  internal frag = region - job",COL_CYAN);
     int totalK=0; for(int i=0;i<an->mem.nreg;i++) totalK+=an->mem.reg[i];
     if(totalK<1)totalK=1;
-    int colx=mx, coly=my+ch*2, colw=cw*16;
+    int nreg=an->mem.nreg>0?an->mem.nreg:1;
+    int colx=mx, coly=my+ch*2;
+    int colw=mw*9/20;                         /* ~45% so region labels fit */
+    if(colw<cw*18) colw=cw*18;
+    if(colw>mw-cw*16) colw=mw-cw*16;
+    if(colw<cw*18) colw=cw*18;
     int colh=(my+mh)-coly-ch; if(colh<ch*6)colh=ch*6;
+    int rhfloor=imin(ch+6, colh/nreg);
     int yy=coly;
     for(int r=0;r<an->mem.nreg;r++){
-        int rh=an->mem.reg[r]*colh/totalK; if(rh<ch+6)rh=ch+6;
+        int rh=an->mem.reg[r]*colh/totalK; if(rh<rhfloor)rh=rhfloor;
         int occ_job=-1; char occ_jid=' '; int occ_frag=0;
         for(int s=0;s<=cur;s++) if(an->mem.step_region[s]==r){ occ_job=an->mem.step_job[s]; occ_jid=an->mem.step_jid[s]; occ_frag=an->mem.step_frag[s]; }
         int filled = occ_job>=0;
@@ -678,29 +698,34 @@ static void render_mem(App *a){
             fb_fill_rect(fb,colx+1,yy+1,colw-2,usedh-2>0?usedh-2:1, pcol(occ_jid-'A'+1));
             snprintf(s,48,"R%d %dK: job %c (frag %dK)",r,an->mem.reg[r],occ_jid,occ_frag);
         } else snprintf(s,48,"R%d %dK: FREE",r,an->mem.reg[r]);
-        fb_text(fb,colx+4,yy+rh/2-ch/2,s, filled?COL_BG:COL_GRAY);
+        /* shrink the label font if it would overrun the box width */
+        int needpx=need_px_w(fb,colw-8,1,(int)strlen(s));
+        uint32_t lc = filled?COL_BG:COL_GRAY;
+        if(needpx<fb->bch_h){ fb_font_for(fb,needpx); fb_text(fb,colx+4,yy+rh/2-fb->ch_h/2,s,lc); fb_font_base(fb); }
+        else fb_text(fb,colx+4,yy+rh/2-ch/2,s,lc);
         yy+=rh+4;
     }
 
     /* right column: input queue, then action + summary anchored to the bottom */
-    int qx=colx+colw+cw*4;
+    int qx=colx+colw+cw*3;
+    int qw=(mx+mw)-qx; if(qw<cw*10)qw=cw*10;
     int qbottom=coly+colh;
     fb_text(fb,qx,coly-ch,"INPUT QUEUE",COL_CYAN);
     int qy=coly;
     for(int s=cur+1;s<an->mem.nstep;s++){
         if(qy>qbottom-ch*5) break;            /* leave room for action lines */
         char b[24]; snprintf(b,24,"%c = %dK",an->mem.step_jid[s],an->mem.step_job[s]);
-        fb_frame(fb,qx,qy,cw*10,ch+6,COL_AMBER); fb_text(fb,qx+4,qy+3,b,COL_AMBER); qy+=ch+10;
+        int bw=imin(cw*12,qw); fb_frame(fb,qx,qy,bw,ch+6,COL_AMBER); fb_text(fb,qx+4,qy+3,b,COL_AMBER); qy+=ch+10;
     }
     int ay=qbottom-ch*3;
-    char act[64];
-    if(an->mem.step_region[cur]<0) snprintf(act,64,"job %c (%dK): NO FIT -> requeue",an->mem.step_jid[cur],an->mem.step_job[cur]);
-    else snprintf(act,64,"job %c (%dK) -> region %d",an->mem.step_jid[cur],an->mem.step_job[cur],an->mem.step_region[cur]);
-    fb_text(fb,qx,ay,act, an->mem.step_region[cur]<0?COL_RED:COL_GREEN);
+    char act[80];
+    if(an->mem.step_region[cur]<0) snprintf(act,80,"job %c (%dK): NO FIT -> SKIP, requeue",an->mem.step_jid[cur],an->mem.step_job[cur]);
+    else snprintf(act,80,"job %c (%dK) -> region %d",an->mem.step_jid[cur],an->mem.step_job[cur],an->mem.step_region[cur]);
+    draw_label_clamped(fb,qx,ay,act, an->mem.step_region[cur]<0?COL_RED:COL_GREEN, qx, mx+mw);
     if(an->phase==2){
-        char r[64]; snprintf(r,64,"== used %d/%d regions, internal frag %dK ==",an->mem.used,an->mem.nreg,an->mem.totfrag);
-        fb_text(fb,qx,ay+ch,r,COL_RED);
-        fb_text(fb,qx,ay+ch*2,"-- press [ESC] to return to shell --",COL_RED);
+        char r[80]; snprintf(r,80,"== used %d/%d regions, internal frag %dK ==",an->mem.used,an->mem.nreg,an->mem.totfrag);
+        draw_label_clamped(fb,qx,ay+ch,r,COL_RED,qx,mx+mw);
+        draw_label_clamped(fb,qx,ay+ch*2,"-- press [ESC] to return to shell --",COL_RED,qx,mx+mw);
     }
     postfx(a);
 }

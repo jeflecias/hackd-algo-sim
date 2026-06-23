@@ -104,7 +104,14 @@ void term_render(App *a){
     int y = MARGIN;
     for (int i = start; i < t->count; i++){
         int idx = (t->head + i) % TERM_SCROLLBK;
-        fb_text(fb, MARGIN, y, t->lines[idx].text, t->lines[idx].color);
+        /* rarely corrupt a line's glyphs for a frame (the parasite bleeds through) */
+        if ((rng_next(&a->rng) & 1023) < 5){
+            char g[TERM_MAXLINE];
+            fb_garble(g, t->lines[idx].text, &a->rng, 18);
+            fb_text(fb, MARGIN, y, g, COL_RED);
+        } else {
+            fb_text(fb, MARGIN, y, t->lines[idx].text, t->lines[idx].color);
+        }
         y += ch;
     }
 
@@ -139,6 +146,8 @@ void term_render(App *a){
         fb_text(fb, fb->w - cw*12, sy, "LIVE INTRUSION", COL_RED);
     }
 
+    /* occasional power flicker / darkness pulse */
+    if ((rng_next(&a->rng) & 1023) < 4) gfx_brightness(fb, 55 + (int)(rng_next(&a->rng)%30));
     /* subtle scanlines for CRT feel */
     gfx_scanlines(fb, 88);
 }
