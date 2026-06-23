@@ -1,0 +1,14 @@
+# Build artifacts
+*.exe
+*.o
+*.obj
+
+# Windows resource compiler output
+*.res
+
+# Editor / OS cruft
+*.swp
+*.swo
+*~
+Thumbs.db
+.DS_Store
