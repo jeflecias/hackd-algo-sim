@@ -225,6 +225,8 @@ typedef struct {
         char     user[64];    /* GetUserNameA          */
         char     host[64];    /* GetComputerNameA      */
         char     when[16];    /* "HH:MM" local time    */
+        double   bsod_pct;    /* fake "% complete" ticker on the BSOD phase */
+        int      variant;     /* which fail->maze cinematic plays this time */
     } fw;
 
     /* 3D escape world (ST_WORLD) */
@@ -238,6 +240,15 @@ typedef struct {
         double   flash;       /* ms left of an escape/catch flash */
         int      escaped;     /* set when the exit is reached */
         int      msg;         /* which warning variant is showing */
+        double   spawn_x, spawn_y; /* desk/monitor spawn cell (activation distance origin) */
+        int      activated;   /* 0=dormant desk scene, 1=maze/monster awake */
+        double   grace;       /* ms left after activation before the monster wakes */
+        int      caught;      /* in the catch-jumpscare phase */
+        double   caught_t;    /* ms within the catch phase */
+        double   pitch;       /* mouse vertical look: horizon offset in pixels */
+        int      mouse_ready; /* mouse-look has been centered this session */
+        double   mpath_t;     /* ms until next monster path recompute */
+        int      pcellx, pcelly; /* player's last grid cell (path-trail rebuild trigger) */
     } world;
 } App;
 
@@ -273,6 +284,7 @@ void fb_box(Framebuffer *fb, int x, int y, int w, int h, uint32_t c);    /* TUI 
 void fb_text_center(Framebuffer *fb, int cx, int y, const char *s, uint32_t c);
 void fb_hline(Framebuffer *fb, int x, int y, int w, uint32_t c);
 void fb_vline(Framebuffer *fb, int x, int y, int h, uint32_t c);
+void fb_line(Framebuffer *fb, int x0, int y0, int x1, int y1, uint32_t c);
 /* variable-size text (true zoom): select a cached font sized px high, restore with base */
 int  fb_font_for(Framebuffer *fb, int px);  /* selects font, updates ch_w/ch_h, returns ch_h */
 void fb_font_base(Framebuffer *fb);         /* restore base font + metrics */
@@ -292,6 +304,11 @@ void gfx_jitter(Framebuffer *fb, uint64_t *rng, int amp);     /* horizontal sign
 void gfx_brightness(Framebuffer *fb, int pct);               /* global dim (flicker / darkness) */
 void gfx_hexdump(Framebuffer *fb, uint64_t *rng, int x, int y, int w, int h);   /* decorative fake memory dump */
 void fb_garble(char *dst, const char *src, uint64_t *rng, int pct);  /* glitch-corrupt a string */
+void gfx_bloom(Framebuffer *fb, int threshold, int intensity);  /* half-res bright-pixel glow */
+void gfx_grain(Framebuffer *fb, uint64_t *rng, int amp);        /* subtle film grain */
+void gfx_desaturate(Framebuffer *fb, int pct);                  /* pull toward luma (SH1 grade) */
+void gfx_dither(Framebuffer *fb);                              /* ordered 4x4 Bayer dither */
+void fb_upscale(Framebuffer *dst, const uint32_t *src, int sw, int sh);  /* nearest upscale */
 
 /* ---- terminal.c ---- */
 void term_init(Terminal *t);
@@ -315,6 +332,25 @@ void intro_render(App *a);
 void skull_render(Framebuffer *fb, int cx, int cy, int frame, uint32_t color);
 int  skull_width_px(Framebuffer *fb);
 int  skull_height_px(Framebuffer *fb);
+
+/* ---- microfont.c (code-defined 5x7 font, sampled per-pixel for in-world text) ---- */
+int  microfont_pixel(char c, int col, int row);   /* col 0..4, row 0..6 -> 0/1 */
+
+/* ---- imageload.c (read-only: the player's own photos, decoded for the maze walls) ---- */
+#define IMG_MAX 6
+#define IMG_DIM 96
+typedef struct {
+    int       count;            /* images successfully decoded            */
+    int       dim;              /* each buffer is dim x dim (0x00RRGGBB)  */
+    uint32_t *px[IMG_MAX];      /* owned; free with images_free           */
+    char      names[IMG_MAX][64];  /* sampled filenames for cryptic text  */
+    int       nnames;
+} ImageSet;
+void images_load(ImageSet *set, uint64_t *rng, int max);
+void images_free(ImageSet *set);
+
+/* ---- terminal.c helper: a procedural hand clawing out of the broken screen ---- */
+void draw_reaching_hand(Framebuffer *fb, int cx, int cy, double reach, uint32_t color);
 
 /* ---- jumpscare.c ---- */
 void jumpscare_schedule(App *a);

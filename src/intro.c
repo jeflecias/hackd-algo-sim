@@ -54,23 +54,26 @@ static void enter_boot(App *a){
 static void enter_welcome(App *a){
     term_clear(&a->term);
     Terminal *t = &a->term;
-    term_queue(t, 50,  COL_RED,   "  ____  _____ ____  ____  _     ___   ____ _  __");
-    term_queue(t, 40,  COL_RED,   " |  _ \\| ____|  _ \\|  _ \\| |   / _ \\ / ___| |/ /");
-    term_queue(t, 40,  COL_RED,   " | | | |  _| | |_) | | | | |  | | | | |   | ' / ");
-    term_queue(t, 40,  COL_RED,   " | |_| | |___|  _ <| |_| | |__| |_| | |___| . \\ ");
-    term_queue(t, 40,  COL_RED,   " |____/|_____|_| \\_\\____/|_____\\___/ \\____|_|\\_\\");
-    term_queue(t, 250, COL_DGREEN," ::  your machine now runs an OS-concepts parasite  ::");
-    term_queue(t, 200, COL_CYAN,  "");
+    /* same DEADLOCK logo + subtitle as the 'banner' command (commands.c) */
+    term_queue(t, 50,  COL_RED,   " ____    _____      _      ____    _        ___     ____   _  __");
+    term_queue(t, 40,  COL_RED,   "|  _ \\  | ____|    / \\    |  _ \\  | |      / _ \\   / ___| | |/ /");
+    term_queue(t, 40,  COL_RED,   "| | | | |  _|     / _ \\   | | | | | |     | | | | | |     | ' / ");
+    term_queue(t, 40,  COL_RED,   "| |_| | | |___   / ___ \\  | |_| | | |___  | |_| | | |___  | . \\ ");
+    term_queue(t, 40,  COL_RED,   "|____/  |_____| /_/   \\_\\ |____/  |_____|  \\___/   \\____| |_|\\_\\");
+    term_queue(t, 220, COL_DGREEN," ::  k e r n e l   p a r a s i t e   v6.6.6  ::");
+    term_queue(t, 150, COL_CYAN,  "");
+    term_queue(t, 120, COL_DGREEN,"Linux kali 6.6.6-parasite #1 SMP PREEMPT_DYNAMIC x86_64 GNU/Linux");
+    term_queue(t, 90,  COL_DGREEN,"Last login: never -- you were already inside.");
     term_queue(t, 120, COL_CYAN,  "WELCOME, root. You are trapped inside a fake shell.");
-    term_queue(t, 90,  COL_GREEN, "The only way to understand it is to RUN its algorithms.");
-    term_queue(t, 90,  COL_GREEN, "Each command animates a lesson from Modules 4-7:");
-    term_queue(t, 70,  COL_AMBER, "  sched  -> CPU scheduling   (fcfs sjf srtf rr ...)");
-    term_queue(t, 70,  COL_AMBER, "  mem    -> memory mgmt      (firstfit bestfit paging ...)");
-    term_queue(t, 70,  COL_AMBER, "  vmem   -> virtual memory   (fifo opt lru belady ...)");
-    term_queue(t, 70,  COL_AMBER, "  disk   -> mass storage     (fcfs sstf scan look ...)");
-    term_queue(t, 90,  COL_GREEN, "Edit the data with 'data <module>'. Read theory with 'man <algo>'.");
-    term_queue(t, 120, COL_RED,   "WARNING: every 1-3 minutes the skull returns with a 30s test.");
-    term_queue(t, 90,  COL_RED,   "         pass or fail, you'll be dropped back where you were.");
+    term_queue(t, 90,  COL_GREEN, "The only way out is to RUN its algorithms (OS Modules 4-7):");
+    term_queue(t, 70,  COL_AMBER, "  sched  fcfs sjf srtf npp pp rr [q] hrrn mlq mlfq");
+    term_queue(t, 70,  COL_AMBER, "  mem    firstfit bestfit worstfit bestavail paging swap");
+    term_queue(t, 70,  COL_AMBER, "  vmem   fifo opt lru belady lfu mfu second eat");
+    term_queue(t, 70,  COL_AMBER, "  disk   fcfs sstf scan cscan look clook [start]");
+    term_queue(t, 90,  COL_GREEN, "  edit | data <module>   tweak datasets     man <algo>   read theory");
+    term_queue(t, 70,  COL_GREEN, "  selftest   verify vs textbook      banner | clear | help [topic]");
+    term_queue(t, 120, COL_RED,   "WARNING: every 30-60 seconds the skull returns with a 30s test.");
+    term_queue(t, 90,  COL_RED,   "         fail it and you're dragged out of the machine.");
     term_queue(t, 150, COL_CYAN,  "Type 'help' to begin.  (ESC = panic exit)");
     term_queue(t, 200, COL_GREEN, "");
 }

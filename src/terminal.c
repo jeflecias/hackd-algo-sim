@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include <math.h>
 
 #define MARGIN 24
 
@@ -89,6 +90,151 @@ void term_update(App *a, double dt){
 
 static const char *PROMPT = "root@kali:~# ";
 
+/* soft additive red glow (the thing behind the screen, light bleeding through a break) */
+static void red_glow(Framebuffer *fb, int cx, int cy, int rad, int strength){
+    if (rad <= 0) return;
+    int x0 = cx-rad < 0 ? 0 : cx-rad, x1 = cx+rad >= fb->w ? fb->w-1 : cx+rad;
+    int y0 = cy-rad < 0 ? 0 : cy-rad, y1 = cy+rad >= fb->h ? fb->h-1 : cy+rad;
+    int r2 = rad*rad;
+    for (int y = y0; y <= y1; y++){
+        uint32_t *row = fb->px + (size_t)y*fb->w;
+        int dy = y-cy;
+        for (int x = x0; x <= x1; x++){
+            int dx = x-cx, d2 = dx*dx+dy*dy;
+            if (d2 > r2) continue;
+            int f = strength * (r2 - d2) / r2;               /* bright center -> 0 at rim */
+            uint32_t p = row[x];
+            int rr = ((p>>16)&0xFF) + f;        if (rr>255) rr=255;
+            int gg = ((p>>8)&0xFF)  + f/8;      if (gg>255) gg=255;
+            int bb = (p&0xFF)       + f/12;     if (bb>255) bb=255;
+            row[x] = RGB32(rr,gg,bb);
+        }
+    }
+}
+
+/* a jagged crack walking outward from (x,y), with optional corruption bleed */
+static void crack_from(App *a, uint64_t *r, int x, int y, double ang, int segs,
+                       int len, uint32_t col, int bleed){
+    Framebuffer *fb = &a->fb;
+    for (int s = 0; s < segs; s++){
+        ang += ((double)(rng_next(r) % 100) / 100.0 - 0.5) * 1.1;
+        int nx = x + (int)(cos(ang) * (len / (double)segs));
+        int ny = y + (int)(sin(ang) * (len / (double)segs));
+        fb_line(fb, x, y, nx, ny, col);
+        if (bleed && (rng_next(r) & 3) == 0)
+            gfx_datamosh(fb, &a->rng, nx-8, ny-8, 16, 16);   /* dark void bleeds from the crack */
+        x = nx; y = ny;
+        if (x < 0 || x >= fb->w || y < 0 || y >= fb->h) break;
+    }
+}
+
+/* The black background fractures as lives are lost: cracks branch in from the edges,
+   glass-shards radiate from impact points, the parasite peeks through ever wider, and on
+   the LAST life a hand claws out. Drawn BEFORE the text so command output stays readable
+   (wreck the chrome, spare the data).  rot: 1 = a life lost, 2 = last life. */
+static void draw_cracks_and_peek(App *a, int rot){
+    if (rot < 1) return;
+    Framebuffer *fb = &a->fb;
+
+    /* seed stable per ~3s window so cracks don't strobe every frame */
+    uint64_t r = (0x9E3779B97F4A7C15ull ^ (uint64_t)(a->now_ms / 3000.0)) | 1;
+    uint32_t base = rot >= 2 ? 0x00C00018u : 0x00480010u;
+
+    /* edge cracks (subtle at rot 1, dense at rot 2) */
+    int ncracks = rot * 4;
+    for (int i = 0; i < ncracks; i++){
+        int edge = rng_range(&r, 0, 3), x, y;
+        switch (edge){
+            case 0:  x = rng_range(&r, 0, fb->w-1); y = 0;           break;
+            case 1:  x = rng_range(&r, 0, fb->w-1); y = fb->h-1;     break;
+            case 2:  x = 0;          y = rng_range(&r, 0, fb->h-1);  break;
+            default: x = fb->w-1;    y = rng_range(&r, 0, fb->h-1);  break;
+        }
+        double ang = atan2(fb->h/2.0 - y, fb->w/2.0 - x);    /* drift toward center */
+        crack_from(a, &r, x, y, ang, 4 + rot*2 + (int)(rng_next(&r)%4), 60 + rot*50, base, rot>=2);
+    }
+
+    /* impact-point shards: one (subtle) at rot 1, two (obvious) at rot 2 */
+    int nimp = rot >= 2 ? 2 : 1;
+    for (int m = 0; m < nimp; m++){
+        int ix = rng_range(&r, fb->w/5, fb->w*4/5);
+        int iy = rng_range(&r, fb->h/5, fb->h*4/5);
+        red_glow(fb, ix, iy, 50 + rot*70, 20 + rot*40);      /* light bleeds through the break */
+        int spokes = 5 + rot*3;
+        for (int s = 0; s < spokes; s++){
+            double ang = (2*3.14159265*s)/spokes + (rng_next(&r)%100)/300.0;
+            crack_from(a, &r, ix, iy, ang, 3 + rot*2, 40 + rot*55, base, rot>=2);
+        }
+    }
+
+    /* the parasite peeks through, more and more */
+    int frame = (int)(a->now_ms / 140);
+    if (rot == 1){
+        /* subtle: a pair of eyes glinting deep behind a crack near an edge */
+        int ex = (((int)(a->now_ms/3700))&1) ? fb->w/6 : fb->w*5/6;
+        int ey = fb->h/4;
+        red_glow(fb, ex, ey, 60, 30);
+        fb_fill_rect(fb, ex-18, ey, 8, 6, 0x00C01018u);
+        fb_fill_rect(fb, ex+10, ey, 8, 6, 0x00C01018u);
+    } else {
+        /* last life: a large pulsing skull behind the glass + a hand clawing out */
+        double pulse = 0.5 + 0.5*sin(a->now_ms/120.0);
+        red_glow(fb, fb->w/2, fb->h/2, fb->h/3, 30 + (int)(40*pulse));
+        int v = 0x60 + (int)(0x9F*pulse);
+        skull_render(fb, fb->w/2, fb->h/2, frame, RGB32(v, 0, v/6));
+        /* the hand reaches out of the central break, in and out */
+        double reach = 0.5 + 0.5*sin(a->now_ms/700.0);
+        draw_reaching_hand(fb, fb->w/2, fb->h/2 + fb->h/12, reach, 0x00120406u);
+        /* corner glimpses too, so it feels surrounded */
+        int sw = skull_width_px(fb), sh = skull_height_px(fb);
+        int slot = (int)(a->now_ms/2500)&3, cx, cy;
+        switch (slot){
+            case 0:  cx = sw/3;         cy = sh/2;         break;
+            case 1:  cx = fb->w - sw/3; cy = sh/2;         break;
+            case 2:  cx = sw/3;         cy = fb->h - sh/2; break;
+            default: cx = fb->w - sw/3; cy = fb->h - sh/2; break;
+        }
+        skull_render(fb, cx, cy, frame, 0x00500010u);
+    }
+}
+
+/* a procedural silhouette hand clawing out through the broken screen. Built from solid
+   blocks with a bright red rim so it reads against the glow behind it. `reach` 0..1
+   extends the fingers (animate it to make the hand grasp in and out). */
+void draw_reaching_hand(Framebuffer *fb, int cx, int cy, double reach, uint32_t color){
+    if (reach < 0) reach = 0;
+    if (reach > 1) reach = 1;
+    int s = fb->h / 22; if (s < 8) s = 8;
+    uint32_t rim = 0x00B00014u;                              /* bright red rim */
+
+    int palmw = s*5, palmh = s*5;
+    int px = cx - palmw/2, py = cy;
+    /* wrist */
+    fb_fill_rect(fb, cx - s*2, py+palmh - s, s*4, s*4, color);
+    fb_frame   (fb, cx - s*2, py+palmh - s, s*4, s*4, rim);
+    /* palm */
+    fb_fill_rect(fb, px, py, palmw, palmh, color);
+    fb_frame   (fb, px, py, palmw, palmh, rim);
+    /* four fingers reaching up (out of the screen) */
+    int reachpx = (int)(s*5 * reach);
+    int fw = s, gap = s/2;
+    int fx = px + gap;
+    int lengths[4] = { s*4 + s, s*4 + s*2, s*4 + s*2, s*4 + s };  /* middle two longest */
+    for (int i = 0; i < 4; i++){
+        int flen = lengths[i] + reachpx;
+        int fy = py - flen;
+        fb_fill_rect(fb, fx, fy, fw, flen + s, color);      /* overlaps into the palm */
+        fb_frame   (fb, fx, fy, fw, flen, rim);
+        fb_fill_rect(fb, fx, fy - s/2, fw, s/2, rim);       /* claw tip */
+        fx += fw + gap;
+    }
+    /* thumb, off the side */
+    int tx = px - s*2, ty = py + s;
+    fb_fill_rect(fb, tx, ty, s*2 + s/2, s*2, color);
+    fb_frame   (fb, tx, ty, s*2 + s/2, s*2, rim);
+    fb_fill_rect(fb, tx - s/2, ty, s/2, s*2, rim);          /* thumb claw */
+}
+
 void term_render(App *a){
     Framebuffer *fb = &a->fb;
     Terminal *t = &a->term;
@@ -96,6 +242,7 @@ void term_render(App *a){
 
     /* the shell rots as lives are consumed in the other world (0..3) */
     int rot = 3 - a->lives; if (rot < 0) rot = 0; if (rot > 3) rot = 3;
+    draw_cracks_and_peek(a, rot);
 
     int ch = fb->ch_h;
     int status_h = ch + 10;

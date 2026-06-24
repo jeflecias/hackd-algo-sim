@@ -8,6 +8,7 @@
 #include "app.h"
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
 
 static void grab_identity(App *a){
     DWORD n = sizeof(a->fw.user);
@@ -25,6 +26,8 @@ void fourthwall_enter(App *a){
     a->state_time = 0;
     a->fw.phase = 0;
     a->fw.t = 0;
+    a->fw.bsod_pct = 0;
+    a->fw.variant = rng_range(&a->rng, 0, 3);   /* a different cinematic each time */
     grab_identity(a);
     gfx_phosphor_reset(&a->fb);
     audio_silence(280);
@@ -33,70 +36,160 @@ void fourthwall_enter(App *a){
 
 void fourthwall_update(App *a, double dt){
     a->fw.t += dt;
+    a->fw.bsod_pct += dt * 0.018;               /* ~5.5s to fill to 100% */
+    if (a->fw.bsod_pct > 100) a->fw.bsod_pct = 100;
+
+    if (a->fw.variant == 3){                     /* datamosh meltdown: 3 phases */
+        if (a->fw.phase == 0){ if (a->fw.t > 2800){ a->fw.phase=1; a->fw.t=0; audio_sfx(SFX_GLITCH,0); } }
+        else if (a->fw.phase == 1){ if (a->fw.t > 2400){ a->fw.phase=2; a->fw.t=0; audio_sfx(SFX_SKULL,0); } }
+        else { if (a->fw.t > 1100) world_enter(a); }
+        return;
+    }
+    /* BSOD / Windows Update / kernel-panic: fill the meter, brief collapse, then maze */
     if (a->fw.phase == 0){
-        if (a->fw.t > 2800){ a->fw.phase = 1; a->fw.t = 0; audio_sfx(SFX_GLITCH, 0); }
-    } else if (a->fw.phase == 1){
-        if (a->fw.t > 2600){ a->fw.phase = 2; a->fw.t = 0; audio_sfx(SFX_SKULL, 0); }
+        if (a->fw.bsod_pct >= 100 && a->fw.t > 2600){ a->fw.phase=1; a->fw.t=0; audio_sfx(SFX_SKULL,0); }
     } else {
-        if (a->fw.t > 1200) world_enter(a);
+        if (a->fw.t > 1300) world_enter(a);
     }
 }
 
-void fourthwall_render(App *a){
+/* a short corrupted collapse used to tear any of the static screens into the maze */
+static void collapse_fx(App *a, double k){
     Framebuffer *fb = &a->fb;
+    gfx_datamosh(fb, &a->rng, 0, 0, fb->w, fb->h);
+    gfx_slice_tear(fb, &a->rng, 40 + (int)(k*50), 4 + (int)(k*5));
+    gfx_rgb_split(fb, 3 + (int)(k*9));
+    if ((rng_next(&a->rng) & 3) == 0) gfx_invert_band(fb, rng_range(&a->rng,0,fb->h-20), 20);
+    gfx_brightness(fb, 90 - (int)(k*70));
+}
 
+/* ---- variant 0: Blue Screen of Death ---- */
+static void render_bsod(App *a){
+    Framebuffer *fb = &a->fb; int W = fb->w, H = fb->h, ch = fb->ch_h;
+    fb_clear(fb, 0x000078D7u);                   /* Windows-10 BSOD blue */
+    int x = W/6, y = H/6;
+    fb_font_for(fb, fb->base_fh * 90 / 100);
+    fb_text(fb, x, y, ":(", COL_WHITE);
+    fb_font_base(fb);
+    char l[160];
+    fb_text(fb, x, y + ch*3, "Your PC ran into a problem and needs YOU.", COL_WHITE);
+    fb_text(fb, x, y + ch*4, "We're just collecting your soul, and then we'll", COL_WHITE);
+    fb_text(fb, x, y + ch*5, "restart you.", COL_WHITE);
+    snprintf(l, sizeof(l), "collecting your soul: %d%% complete", (int)a->fw.bsod_pct);
+    fb_text(fb, x, y + ch*7, l, COL_WHITE);
+    int bw = W/3, by = y + ch*8;
+    fb_frame(fb, x, by, bw, ch, COL_WHITE);
+    fb_fill_rect(fb, x, by, (int)(bw * a->fw.bsod_pct/100.0), ch, COL_WHITE);
+    fb_text(fb, x, y + ch*11, "If you call someone, tell them: YOU ARE THE BUG", COL_WHITE);
+    snprintf(l, sizeof(l), "Stop code: SOUL_NOT_FOUND   host: %s   user: %s", a->fw.host, a->fw.user);
+    fb_text(fb, x, y + ch*13, l, COL_WHITE);
+    if (a->fw.phase >= 1) collapse_fx(a, a->fw.t/1300.0);
+    gfx_scanlines(fb, 92);
+}
+
+/* ---- variant 1: fake Windows Update ---- */
+static void render_update(App *a){
+    Framebuffer *fb = &a->fb; int W = fb->w, H = fb->h, ch = fb->ch_h;
+    fb_clear(fb, 0x00103A6Eu);
+    int cx = W/2, cy = H/3, R = H/16;
+    double ang = a->fw.t / 170.0;                 /* spinner */
+    for (int i = 0; i < 8; i++){
+        double aa = ang + i * (6.2831853/8.0);
+        int dx = cx + (int)(cos(aa)*R), dy = cy + (int)(sin(aa)*R);
+        int b = 70 + (i*22) % 185;
+        fb_fill_rect(fb, dx-3, dy-3, 6, 6, RGB32(b,b,b));
+    }
+    int pct = (int)a->fw.bsod_pct;
+    char l[160];
+    snprintf(l, sizeof(l), "Working on updates  %d%%", pct);
+    fb_text_center(fb, cx, cy + R + ch*2, l, COL_WHITE);
+    const char *taunt = pct < 40 ? "Don't turn off your PC."
+                      : pct < 70 ? "Don't turn off your PC."
+                      : pct < 92 ? "I'm almost inside."
+                                 : "This won't hurt. much.";
+    snprintf(l, sizeof(l), "%s", taunt);
+    fb_text_center(fb, cx, cy + R + ch*4, l, COL_WHITE);
+    if (pct >= 50){
+        snprintf(l, sizeof(l), "preparing %s for the dark...", a->fw.user);
+        fb_text_center(fb, cx, cy + R + ch*6, l, COL_WHITE);
+    }
+    if (a->fw.phase >= 1) collapse_fx(a, a->fw.t/1300.0);
+    gfx_scanlines(fb, 92);
+}
+
+/* ---- variant 2: kernel panic + format ---- */
+static void render_panic(App *a){
+    Framebuffer *fb = &a->fb; int ch = fb->ch_h;
+    fb_clear(fb, 0x00000000);
+    int x = 28, y = 24;
+    char l[160];
+    fb_text(fb, x, y,           "Kernel panic - not syncing: Attempted to kill YOU", COL_WHITE); y += ch;
+    snprintf(l,sizeof(l),       "CPU: 0 PID: 666 Comm: %s Tainted: G   D", a->fw.user);
+    fb_text(fb, x, y, l, COL_WHITE); y += ch;
+    snprintf(l,sizeof(l),       "Hardware name: %s", a->fw.host);
+    fb_text(fb, x, y, l, COL_WHITE); y += ch*2;
+    fb_text(fb, x, y,           "Call Trace:", COL_DGREEN); y += ch;
+    fb_text(fb, x, y,           "  [<ffffffff8badf00d>] devour_soul+0x66/0x66", COL_DGREEN); y += ch;
+    fb_text(fb, x, y,           "  [<ffffffffdeadbeef>] consume+0xff/0xff", COL_DGREEN); y += ch;
+    fb_text(fb, x, y,           "  [<ffffffffc0000005>] no_such_exit+0x0/0x0", COL_DGREEN); y += ch;
+    fb_text(fb, x, y,           "  [<00000000000000>] you+0x0/0x0", COL_RED); y += ch*2;
+    snprintf(l,sizeof(l),       "formatting /dev/soul ... %d%%", (int)a->fw.bsod_pct);
+    fb_text(fb, x, y, l, (int)a->fw.bsod_pct >= 100 ? COL_RED : COL_AMBER); y += ch;
+    int bw = fb->w/3;
+    fb_frame(fb, x, y, bw, ch, COL_DGREEN);
+    fb_fill_rect(fb, x, y, (int)(bw * a->fw.bsod_pct/100.0), ch, COL_RED);
+    if ((rng_next(&a->rng) & 31) == 0) gfx_slice_tear(fb, &a->rng, 16, 2);
+    if (a->fw.phase >= 1) collapse_fx(a, a->fw.t/1300.0);
+    gfx_scanlines(fb, 86);
+}
+
+/* ---- variant 3: datamosh meltdown over the real desktop ---- */
+static void render_meltdown(App *a){
+    Framebuffer *fb = &a->fb;
     if (a->fw.phase == 0){
-        /* their real desktop, glitching, with the parasite talking to them */
         if (a->shot) fb_blit_shot(fb, a->shot); else fb_clear(fb, COL_BG);
         gfx_rgb_split(fb, 2 + (int)(a->fw.t / 600));
         if ((rng_next(&a->rng) & 3) == 0) gfx_slice_tear(fb, &a->rng, 30, 3);
         gfx_brightness(fb, 55);
-
         char l0[96], l1[96], l2[96];
         snprintf(l0, sizeof(l0), "I SEE YOU, %s.", a->fw.user);
         snprintf(l1, sizeof(l1), "this is %s.", a->fw.host);
         snprintf(l2, sizeof(l2), "it's %s. why are you still awake?", a->fw.when);
         const char *L[4] = { l0, l1, l2, "you failed. now you belong to the machine." };
-
         int shown = (int)(a->fw.t / 650) + 1; if (shown > 4) shown = 4;
         int y = fb->h/2 - fb->ch_h*4;
         for (int i = 0; i < shown; i++){
-            if ((rng_next(&a->rng) & 7) == 0){
-                char g[96]; fb_garble(g, L[i], &a->rng, 25);
-                fb_text_center(fb, fb->w/2, y, g, COL_RED);
-            } else {
-                fb_text_center(fb, fb->w/2, y, L[i], COL_RED);
-            }
+            if ((rng_next(&a->rng) & 7) == 0){ char g[96]; fb_garble(g, L[i], &a->rng, 25);
+                fb_text_center(fb, fb->w/2, y, g, COL_RED); }
+            else fb_text_center(fb, fb->w/2, y, L[i], COL_RED);
             y += fb->ch_h*2;
         }
         gfx_scanlines(fb, 82);
         return;
     }
-
     if (a->fw.phase == 1){
-        /* pull back: the desktop shrinks into a monitor on a desk in a dark room */
-        fb_clear(fb, 0x00000000);
-        double k = a->fw.t / 2600.0; if (k > 1) k = 1;
-        double scale = 1.0 - 0.78*k;
-        int dw = (int)(fb->w * scale), dh = (int)(fb->h * scale);
-        int dx = (fb->w - dw) / 2;
-        int dy = (int)((fb->h - dh) / 2 + k * fb->h * 0.18);   /* slides down as you stand */
-        fb_blit_shot_rect(fb, a->shot, dx, dy, dw, dh);
-        fb_frame(fb, dx-6, dy-6, dw+12, dh+12, 0x00242424);    /* monitor bezel */
-        fb_fill_rect(fb, dx-6, dy+dh+6, dw+12, 12, 0x00141414); /* monitor chin */
-        int desk = dy + dh + 48;
-        if (desk < fb->h) fb_fill_rect(fb, 0, desk, fb->w, fb->h - desk, 0x00080808);
-        gfx_vignette(fb);
-        gfx_brightness(fb, 85 - (int)(k*60));
-        gfx_scanlines(fb, 88);
+        if (a->shot) fb_blit_shot(fb, a->shot); else fb_clear(fb, 0x00000000);
+        double k = a->fw.t / 2400.0; if (k > 1) k = 1;
+        gfx_datamosh(fb, &a->rng, 0, 0, fb->w, fb->h);
+        gfx_slice_tear(fb, &a->rng, 50 + (int)(k*60), 6 + (int)(k*6));
+        gfx_rgb_split(fb, 6 + (int)(k*10));
+        gfx_brightness(fb, 80 - (int)(k*70));
+        gfx_scanlines(fb, 80);
         return;
     }
-
-    /* cut to black */
     fb_clear(fb, 0x00000000);
     if ((rng_next(&a->rng) & 3) == 0) gfx_invert_band(fb, 0, fb->h);
     fb_text_center(fb, fb->w/2, fb->h/2, "ERROR", COL_RED);
     gfx_scanlines(fb, 80);
+}
+
+void fourthwall_render(App *a){
+    switch (a->fw.variant){
+        case 0:  render_bsod(a);     break;
+        case 1:  render_update(a);   break;
+        case 2:  render_panic(a);    break;
+        default: render_meltdown(a); break;
+    }
 }
 
 /* ============================== corrupted exit ============================== */

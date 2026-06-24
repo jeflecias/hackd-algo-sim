@@ -6,11 +6,11 @@
 
 static void print_banner(App *a){
     Terminal *t = &a->term;
-    term_print(t, COL_RED,   "  ____   _____     _     ____   _       ___    ____  _  __");
-    term_print(t, COL_RED,   " |  _ \\ | ____|   / \\   |  _ \\ | |     / _ \\  / ___|| |/ /");
-    term_print(t, COL_RED,   " | | | ||  _|    / _ \\  | | | || |    | | | || |    | ' / ");
-    term_print(t, COL_RED,   " | |_| || |___  / ___ \\ | |_| || |___ | |_| || |___ | . \\ ");
-    term_print(t, COL_RED,   " |____/ |_____|/_/   \\_\\|____/ |_____| \\___/  \\____||_|\\_\\");
+    term_print(t, COL_RED,   " ____    _____      _      ____    _        ___     ____   _  __");
+    term_print(t, COL_RED,   "|  _ \\  | ____|    / \\    |  _ \\  | |      / _ \\   / ___| | |/ /");
+    term_print(t, COL_RED,   "| | | | |  _|     / _ \\   | | | | | |     | | | | | |     | ' / ");
+    term_print(t, COL_RED,   "| |_| | | |___   / ___ \\  | |_| | | |___  | |_| | | |___  | . \\ ");
+    term_print(t, COL_RED,   "|____/  |_____| /_/   \\_\\ |____/  |_____|  \\___/   \\____| |_|\\_\\");
     term_print(t, COL_DGREEN," ::  k e r n e l   p a r a s i t e   v6.6.6  ::");
 }
 

@@ -150,6 +150,23 @@ void fb_blit_shot_rect(Framebuffer *fb, const uint32_t *shot, int dx, int dy, in
 void fb_hline(Framebuffer *fb, int x, int y, int w, uint32_t c){ fb_fill_rect(fb,x,y,w,1,c); }
 void fb_vline(Framebuffer *fb, int x, int y, int h, uint32_t c){ fb_fill_rect(fb,x,y,1,h,c); }
 
+/* Bresenham line, clipped to the framebuffer (per-pixel bounds test) */
+void fb_line(Framebuffer *fb, int x0, int y0, int x1, int y1, uint32_t c){
+    int dx = x1 - x0; if (dx < 0) dx = -dx;
+    int dy = y1 - y0; if (dy < 0) dy = -dy;
+    int sx = x0 < x1 ? 1 : -1;
+    int sy = y0 < y1 ? 1 : -1;
+    int err = dx - dy;
+    for (;;){
+        if (x0 >= 0 && x0 < fb->w && y0 >= 0 && y0 < fb->h)
+            fb->px[(size_t)y0 * fb->w + x0] = c;
+        if (x0 == x1 && y0 == y1) break;
+        int e2 = err << 1;
+        if (e2 > -dy){ err -= dy; x0 += sx; }
+        if (e2 <  dx){ err += dx; y0 += sy; }
+    }
+}
+
 void fb_frame(Framebuffer *fb, int x, int y, int w, int h, uint32_t c){
     fb_hline(fb, x, y, w, c);
     fb_hline(fb, x, y+h-1, w, c);
@@ -346,6 +363,134 @@ void gfx_hexdump(Framebuffer *fb, uint64_t *rng, int x, int y, int w, int h){
         addr += bytes;
     }
     fb_font_base(fb);
+}
+
+/* nearest-neighbor upscale of a low-res src (sw x sh) into dst (fixed-point step).
+   used to render the 3D world at a low internal resolution, then blow it up. */
+void fb_upscale(Framebuffer *dst, const uint32_t *src, int sw, int sh){
+    int dw = dst->w, dh = dst->h;
+    if (sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0) return;
+    uint32_t dsx = ((uint32_t)sw << 16) / dw;
+    uint32_t dsy = ((uint32_t)sh << 16) / dh;
+    uint32_t syf = 0;
+    for (int y = 0; y < dh; y++){
+        int sy = syf >> 16;
+        if (sy >= sh) sy = sh-1;
+        syf += dsy;
+        const uint32_t *srow = src + (size_t)sy*sw;
+        uint32_t *drow = dst->px + (size_t)y*dw;
+        uint32_t sxf = 0;
+        for (int x = 0; x < dw; x++){
+            int sx = sxf >> 16; sxf += dsx;
+            drow[x] = srow[sx];
+        }
+    }
+}
+
+/* pull each pixel toward its luma by pct% (SH1-style desaturated grade) */
+void gfx_desaturate(Framebuffer *fb, int pct){
+    if (pct <= 0) return;
+    if (pct > 100) pct = 100;
+    int n = fb->w * fb->h;
+    uint32_t *p = fb->px;
+    for (int i = 0; i < n; i++){
+        uint32_t c = p[i];
+        int r=(c>>16)&0xFF, g=(c>>8)&0xFF, b=c&0xFF;
+        int y = (r*54 + g*183 + b*19) >> 8;        /* luma approx */
+        r += (y-r)*pct/100; g += (y-g)*pct/100; b += (y-b)*pct/100;
+        p[i] = RGB32(r,g,b);
+    }
+}
+
+/* ordered 4x4 Bayer dither - the PS1 banded-gradient texture */
+void gfx_dither(Framebuffer *fb){
+    static const int B[4][4] = {{0,8,2,10},{12,4,14,6},{3,11,1,9},{15,7,13,5}};
+    for (int y = 0; y < fb->h; y++){
+        uint32_t *row = fb->px + (size_t)y*fb->w;
+        const int *brow = B[y & 3];
+        for (int x = 0; x < fb->w; x++){
+            int d = brow[x & 3] - 8;               /* -8..7 */
+            uint32_t c = row[x];
+            int r=((c>>16)&0xFF)+d, g=((c>>8)&0xFF)+d, b=(c&0xFF)+d;
+            r = r<0?0:(r>255?255:r);
+            g = g<0?0:(g>255?255:g);
+            b = b<0?0:(b>255?255:b);
+            row[x] = RGB32(r,g,b);
+        }
+    }
+}
+
+/* subtle film grain: nudge a staggered subset of pixels by +/-amp each frame */
+void gfx_grain(Framebuffer *fb, uint64_t *rng, int amp){
+    if (amp <= 0) return;
+    int n = fb->w * fb->h;
+    uint32_t *p = fb->px;
+    int start = (int)(rng_next(rng) % 3);
+    for (int i = start; i < n; i += 3){
+        int d = (int)(rng_next(rng) % (2*amp+1)) - amp;
+        uint32_t c = p[i];
+        int r = ((c>>16)&0xFF)+d, g = ((c>>8)&0xFF)+d, b = (c&0xFF)+d;
+        r = r<0?0:(r>255?255:r);
+        g = g<0?0:(g>255?255:g);
+        b = b<0?0:(b>255?255:b);
+        p[i] = RGB32(r,g,b);
+    }
+}
+
+/* bloom: downsample bright pixels to half-res, separable box-blur, add back.
+   the one heavier post pass; scratch buffers are malloc'd once and reused. */
+void gfx_bloom(Framebuffer *fb, int threshold, int intensity){
+    static uint32_t *ba = NULL, *bb = NULL; static int bw = 0, bh = 0;
+    int hw = fb->w/2, hh = fb->h/2;
+    if (hw < 2 || hh < 2) return;
+    if (bw != hw || bh != hh){
+        free(ba); free(bb);
+        ba = (uint32_t*)malloc((size_t)hw*hh*4);
+        bb = (uint32_t*)malloc((size_t)hw*hh*4);
+        bw = hw; bh = hh;
+    }
+    if (!ba || !bb){ bw = bh = 0; return; }
+
+    for (int y = 0; y < hh; y++){
+        uint32_t *src = fb->px + (size_t)(y*2)*fb->w;
+        uint32_t *d = ba + (size_t)y*hw;
+        for (int x = 0; x < hw; x++){
+            uint32_t c = src[x*2];
+            int r=(c>>16)&0xFF, g=(c>>8)&0xFF, b=c&0xFF;
+            int mx = r>g?r:g; if (b>mx) mx=b;
+            d[x] = (mx > threshold) ? c : 0u;
+        }
+    }
+    int R = 2;
+    for (int y = 0; y < hh; y++){                          /* horizontal ba->bb */
+        uint32_t *s = ba + (size_t)y*hw, *o = bb + (size_t)y*hw;
+        for (int x = 0; x < hw; x++){
+            int rs=0,gs=0,bs=0,cnt=0;
+            for (int k=-R;k<=R;k++){ int xx=x+k; if(xx<0||xx>=hw)continue;
+                uint32_t c=s[xx]; rs+=(c>>16)&0xFF; gs+=(c>>8)&0xFF; bs+=c&0xFF; cnt++; }
+            o[x] = RGB32(rs/cnt, gs/cnt, bs/cnt);
+        }
+    }
+    for (int x = 0; x < hw; x++){                          /* vertical bb->ba */
+        for (int y = 0; y < hh; y++){
+            int rs=0,gs=0,bs=0,cnt=0;
+            for (int k=-R;k<=R;k++){ int yy=y+k; if(yy<0||yy>=hh)continue;
+                uint32_t c=bb[(size_t)yy*hw+x]; rs+=(c>>16)&0xFF; gs+=(c>>8)&0xFF; bs+=c&0xFF; cnt++; }
+            ba[(size_t)y*hw+x] = RGB32(rs/cnt, gs/cnt, bs/cnt);
+        }
+    }
+    for (int y = 0; y < fb->h; y++){                       /* add back, upscaled */
+        uint32_t *d = fb->px + (size_t)y*fb->w;
+        uint32_t *s = ba + (size_t)(y/2)*hw;
+        for (int x = 0; x < fb->w; x++){
+            uint32_t bl = s[x/2];
+            int r = ((d[x]>>16)&0xFF) + (((bl>>16)&0xFF)*intensity/100);
+            int g = ((d[x]>>8)&0xFF)  + (((bl>>8)&0xFF)*intensity/100);
+            int b = (d[x]&0xFF)       + ((bl&0xFF)*intensity/100);
+            r = r>255?255:r; g = g>255?255:g; b = b>255?255:b;
+            d[x] = RGB32(r,g,b);
+        }
+    }
 }
 
 void gfx_vignette(Framebuffer *fb){
