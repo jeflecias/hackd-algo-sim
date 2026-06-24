@@ -576,8 +576,33 @@ static void render_disk(App *a){
     Framebuffer *fb=&a->fb; Anim *an=&a->anim; int ch=fb->bch_h,cw=fb->bch_w;
     int mx,my,mw,mh; chrome(a,&mx,&my,&mw,&mh);
     int lo=an->disk.dmin, hi=an->disk.dmax; if(hi<=lo)hi=lo+1;
-    int cur=clampi((int)an->clock,0,an->disk.np-1);
-    #define TRK2X(t) (mx + ((t)-lo)*mw/(hi-lo))
+    int np=an->disk.np; if(np<2)np=2;
+    int cur=clampi((int)an->clock,0,np-1);
+    double frac=an->clock-(double)cur; if(frac<0)frac=0; if(frac>1)frac=1;
+
+    /* follow-camera: while animating (phase 1) the visible window zooms onto the live head
+       so each seek reads as a left/right move; in phase 2 it eases out to the full road.
+       ONE shared track-window drives both the ruler and the graph, so the red head marker
+       always sits directly above the current point of the path. */
+    int nxt=cur+1<np?cur+1:cur;
+    double headf=an->disk.path[cur]+(double)(an->disk.path[nxt]-an->disk.path[cur])*frac;
+    double t=(an->phase==2)?(an->phase_time/700.0):0.0; if(t<0)t=0; if(t>1)t=1;
+    double ftspan=(hi-lo)*0.35; if(ftspan<1)ftspan=1;
+    double ftlo=headf-ftspan/2, fthi=headf+ftspan/2;
+    if(ftlo<lo){ fthi+=lo-ftlo; ftlo=lo; }
+    if(fthi>hi){ ftlo-=fthi-hi; fthi=hi; }
+    if(ftlo<lo)ftlo=lo;
+    if(fthi>hi)fthi=hi;
+    double fslo=cur-5, fshi=cur+1;
+    if(fslo<0){ fshi+=-fslo; fslo=0; }
+    if(fshi>np-1){ fslo-=fshi-(np-1); fshi=np-1; }
+    if(fslo<0)fslo=0;
+    if(fshi>np-1)fshi=np-1;
+    double cam_tlo=ftlo+(lo-ftlo)*t, cam_thi=fthi+(hi-fthi)*t;       /* focus -> full */
+    double cam_slo=fslo+(0-fslo)*t, cam_shi=fshi+((np-1)-fshi)*t;
+    if(cam_thi-cam_tlo<1)cam_thi=cam_tlo+1;
+    if(cam_shi-cam_slo<1)cam_shi=cam_slo+1;
+    #define CAM_X(trk) (mx + (int)(((double)(trk)-cam_tlo)*mw/(cam_thi-cam_tlo)))
 
     int y=my;
     char th[64]; snprintf(th,64,"DISK TRACKS (%d..%d)   minimize seek time",lo,hi);
@@ -585,8 +610,9 @@ static void render_disk(App *a){
     int ry=y+ch*2;
     fb_hline(fb,mx,ry,mw,COL_DGREEN);
     for(int i=0;i<an->disk.n;i++){
-        int t=an->disk.req[i]; int x=TRK2X(t);
-        int served=0; for(int k=1;k<=cur;k++) if(an->disk.path[k]==t)served=1;
+        int t2=an->disk.req[i]; int x=CAM_X(t2);
+        if(x<mx||x>mx+mw) continue;
+        int served=0; for(int k=1;k<=cur;k++) if(an->disk.path[k]==t2)served=1;
         fb_vline(fb,x,ry-6,12,served?COL_GREEN:COL_GRAY);
     }
     /* track-number labels: small font, sorted, skip-if-too-close */
@@ -598,7 +624,8 @@ static void render_disk(App *a){
         for(int i=1;i<nn;i++){ int v=idx[i],j=i-1; while(j>=0&&idx[j]>v){idx[j+1]=idx[j];j--;} idx[j+1]=v; }
         int lastx=-100000;
         for(int i=0;i<nn;i++){
-            int x=TRK2X(idx[i]);
+            int x=CAM_X(idx[i]);
+            if(x<mx||x>mx+mw) continue;
             char s[8]; snprintf(s,8,"%d",idx[i]);
             int lw=(int)strlen(s)*scw;
             if(x-lastx < lw+scw) continue;      /* keep a full label-width + gap apart */
@@ -607,29 +634,40 @@ static void render_disk(App *a){
         }
         fb_font_base(fb);
     }
-    int hpos=an->disk.path[cur]; int hx=TRK2X(hpos);
+    int hpos=an->disk.path[cur]; int hx=CAM_X(headf);
     fb_fill_rect(fb,hx-3,ry-10,7,20,COL_RED);
     char hl[40]; snprintf(hl,40,"head @ %d",hpos);
-    draw_label_clamped(fb,hx-cw*2,ry+10,hl,COL_WHITE,mx,mx+mw);
+    draw_label_clamped(fb,hx-(int)strlen(hl)*cw/2,ry+10,hl,COL_WHITE,mx,mx+mw);  /* centred under marker */
     y=ry+ch*3;
 
-    /* zigzag position-vs-step graph (geometric: scales freely) */
-    fb_text(fb,mx,y,"HEAD PATH (track vs. step)",COL_CYAN); y+=ch+2;
+    /* head path: track on x (aligned with the ruler) vs step on y, descending -- so every
+       step drops diagonally down-left/down-right and never overlaps a previous head. */
+    fb_text(fb,mx,y,"HEAD PATH (track vs. step, time \\/)",COL_CYAN); y+=ch+2;
     int gy=y, reserve=ch*3;
     int gh=(my+mh)-gy-reserve; if(gh<ch*4)gh=ch*4;
     fb_frame(fb,mx,gy,mw,gh,0x00203020);
-    int np=an->disk.np; if(np<2)np=2;
+    #define CAM_Y(stp) (gy + (int)(((double)(stp)-cam_slo)*gh/(cam_shi-cam_slo)))
+    int px0=0,py0=0;
     for(int i=0;i<=cur;i++){
-        int x=mx+i*mw/(np-1);
-        int yy=gy+ (an->disk.path[i]-lo)*gh/(hi-lo);
-        fb_fill_rect(fb,x-2,yy-2,5,5,COL_AMBER);
+        int x=CAM_X(an->disk.path[i]), yy=CAM_Y(i);
         if(i>0){
-            int x0=mx+(i-1)*mw/(np-1);
-            int y0=gy+(an->disk.path[i-1]-lo)*gh/(hi-lo);
-            int steps=x-x0; if(steps<1)steps=1;
-            for(int s=0;s<=steps;s++){ int xx=x0+s; int yyy=y0+(yy-y0)*s/steps; fb_fill_rect(fb,xx,yyy,1,1,COL_GREEN); }
+            int x0=px0,y0=py0, dx=x-x0, dy=yy-y0;
+            int steps=(dy<0?-dy:dy), adx=(dx<0?-dx:dx); if(adx>steps)steps=adx; if(steps<1)steps=1;
+            for(int s=0;s<=steps;s++){ int xx=x0+dx*s/steps, yyy=y0+dy*s/steps;
+                if(xx>=mx&&xx<=mx+mw&&yyy>=gy&&yyy<=gy+gh) fb_fill_rect(fb,xx,yyy,1,1,COL_GREEN); }
         }
+        if(x>=mx&&x<=mx+mw&&yy>=gy&&yy<=gy+gh) fb_fill_rect(fb,x-2,yy-2,5,5,COL_AMBER);
+        px0=x; py0=yy;
     }
+    /* live partial seek toward the next track, for smooth left/right motion */
+    if(an->phase==1 && cur<np-1 && frac>0){
+        int xn=CAM_X(headf), yn=CAM_Y(cur+frac);
+        int x0=px0,y0=py0, dx=xn-x0, dy=yn-y0;
+        int steps=(dy<0?-dy:dy), adx=(dx<0?-dx:dx); if(adx>steps)steps=adx; if(steps<1)steps=1;
+        for(int s=0;s<=steps;s++){ int xx=x0+dx*s/steps, yyy=y0+dy*s/steps;
+            if(xx>=mx&&xx<=mx+mw&&yyy>=gy&&yyy<=gy+gh) fb_fill_rect(fb,xx,yyy,1,1,COL_GREEN); }
+    }
+    #undef CAM_Y
     y=gy+gh+4;
     int tot=0; for(int i=1;i<=cur;i++){ int d=an->disk.path[i]-an->disk.path[i-1]; tot+=d<0?-d:d; }
     char tcs[48]; snprintf(tcs,48,"head movement so far: %d tracks",tot);
@@ -639,7 +677,7 @@ static void render_disk(App *a){
         fb_text(fb,mx,y,r,COL_RED);
     }
     postfx(a);
-    #undef TRK2X
+    #undef CAM_X
 }
 
 /* ---- memory: fits + paging ---- */
@@ -694,15 +732,25 @@ static void render_mem(App *a){
         uint32_t c = filled? (isnow?COL_WHITE:COL_GREEN) : COL_DGREEN;
         fb_frame(fb,colx,yy,colw,rh,c);
         char s[48];
-        if(filled){ int usedh=(an->mem.reg[r]-occ_frag)*rh/an->mem.reg[r];
+        int usedh=rh;
+        if(filled){ usedh=(an->mem.reg[r]-occ_frag)*rh/an->mem.reg[r];
             fb_fill_rect(fb,colx+1,yy+1,colw-2,usedh-2>0?usedh-2:1, pcol(occ_jid-'A'+1));
             snprintf(s,48,"R%d %dK: job %c (frag %dK)",r,an->mem.reg[r],occ_jid,occ_frag);
         } else snprintf(s,48,"R%d %dK: FREE",r,an->mem.reg[r]);
         /* shrink the label font if it would overrun the box width */
         int needpx=need_px_w(fb,colw-8,1,(int)strlen(s));
-        uint32_t lc = filled?COL_BG:COL_GRAY;
-        if(needpx<fb->bch_h){ fb_font_for(fb,needpx); fb_text(fb,colx+4,yy+rh/2-fb->ch_h/2,s,lc); fb_font_base(fb); }
-        else fb_text(fb,colx+4,yy+rh/2-ch/2,s,lc);
+        int shrink=needpx<fb->bch_h;
+        if(shrink) fb_font_for(fb,needpx);
+        int texth=shrink?fb->ch_h:ch;
+        /* keep the label on a readable background: centre it in the job-colored *used* band
+           (COL_BG reads on the bright fill) when it fits there; otherwise centre it in the
+           whole region in COL_GRAY so it stays legible over the black frag/empty area. */
+        int ly; uint32_t lc;
+        if(filled && usedh>=texth+2){ ly=yy+(usedh-texth)/2; lc=COL_BG; }
+        else { ly=yy+(rh-texth)/2; lc=COL_GRAY; }
+        if(ly<yy+1)ly=yy+1;
+        fb_text(fb,colx+4,ly,s,lc);
+        if(shrink) fb_font_base(fb);
         yy+=rh+4;
     }
 
