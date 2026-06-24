@@ -270,6 +270,17 @@ void audio_sfx(int id, float param){
         spawn(0,1700,420,0.45,0.12,0.01,0.28,0.02); /* ring-mod-ish screech sweep */
         spawn(3,0,0,0.55,0.20,0.02,0.40,0);         /* breathy noise body */
         break;
+    case SFX_SIREN:                      /* Silent Hill air-raid wail (slow up then down) */
+        spawn(0,300,560,1.8,0.16,0.5,0.9,0.0);      /* rise  */
+        spawn(0,300,560,1.8,0.11,0.5,0.9,0.0);
+        spawn(0,560,300,1.8,0.15,0.6,1.2,1.8);      /* fall  */
+        spawn(0,560,300,1.8,0.10,0.6,1.2,1.8);
+        break;
+    case SFX_STATIC:                     /* radio static crackle (the monster is near) */
+        spawn(3,0,0,0.12,0.07+0.10*param,0.003,0.08,0.0);
+        spawn(3,0,0,0.08,0.05+0.08*param,0.002,0.06,0.05);
+        spawn(1,5200,0,0.015,0.03*param,0.001,0.008,0.0);   /* hiss tick */
+        break;
     default: break;
     }
 }

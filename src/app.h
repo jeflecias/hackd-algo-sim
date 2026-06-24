@@ -340,7 +340,7 @@ int  skull_height_px(Framebuffer *fb);
 int  microfont_pixel(char c, int col, int row);   /* col 0..4, row 0..6 -> 0/1 */
 
 /* ---- imageload.c (read-only: the player's own photos, decoded for the maze walls) ---- */
-#define IMG_MAX 6
+#define IMG_MAX 8
 #define IMG_DIM 96
 typedef struct {
     int       count;            /* images successfully decoded            */
@@ -390,7 +390,8 @@ void dataedit_key_special(App *a, int vk);
 enum {
     SFX_KEY=0, SFX_BOOT, SFX_PAGEFAULT, SFX_HIT, SFX_SEEK, SFX_SWITCH,
     SFX_ALLOC, SFX_NOFIT, SFX_SKULL, SFX_CORRECT, SFX_WRONG, SFX_GLITCH, SFX_DECRYPT,
-    SFX_BREATH, SFX_DRIP, SFX_WHISPER, SFX_SCAN, SFX_HEART, SFX_SCREAM
+    SFX_BREATH, SFX_DRIP, SFX_WHISPER, SFX_SCAN, SFX_HEART, SFX_SCREAM,
+    SFX_SIREN, SFX_STATIC
 };
 void audio_init(void);
 void audio_update(void);     /* call once per frame to refill stream buffers */

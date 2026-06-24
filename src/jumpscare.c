@@ -12,11 +12,14 @@
 static int    s_stung = 0;   /* has the silence->skull sting fired for this scare? */
 static double s_hb    = 0;   /* heartbeat timer (ms) - accelerates as time runs out */
 
-/* normalize: keep [0-9a-z] only, lowercase */
+/* normalize: keep [0-9a-z], lowercase, and DROP 'p' so process answers typed the way
+   the prompt shows them work: "P1 P2 P3"->"123", "P2"->"2" (canonical answers are digits
+   or y/n, none contain 'p', so this is safe). */
 static void normalize(char *out, const char *in){
     int j = 0;
     for (int i = 0; in[i] && j < 62; i++){
         char c = (char)tolower((unsigned char)in[i]);
+        if (c == 'p') continue;
         if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z')) out[j++] = c;
     }
     out[j] = 0;
@@ -41,11 +44,11 @@ static void gen_puzzle(App *a){
         int o[3]={0,1,2};
         for (int i=2;i>0;i--){int k=rng_range(r,0,i);int tmp=o[i];o[i]=o[k];o[k]=tmp;}
         snprintf(a->scare.question, 256,
-            "FCFS: P%d(AT%d)  P%d(AT%d)  P%d(AT%d).  Type the run order (e.g. P1 P2 P3):",
+            "FCFS: P%d(AT%d)  P%d(AT%d)  P%d(AT%d).  Type the run order (e.g. 231 or P2 P3 P1):",
             id[o[0]],at[o[0]], id[o[1]],at[o[1]], id[o[2]],at[o[2]]);
         /* answer = ids sorted by arrival = 1 2 3 */
         snprintf(ans,64,"123");
-        strcpy(a->scare.hint,"earliest arrival runs first");
+        strcpy(a->scare.hint,"earliest arrival first; type the 3 process numbers in order");
         break; }
     case 1: { /* SJF: which runs first */
         int b1=rng_range(r,4,9), b2=rng_range(r,1,3), b3=rng_range(r,5,9);
@@ -54,7 +57,7 @@ static void gen_puzzle(App *a){
             b1,b2,b3);
         int mn=b1,mi=1; if(b2<mn){mn=b2;mi=2;} if(b3<mn){mn=b3;mi=3;}
         snprintf(ans,64,"%d",mi);
-        strcpy(a->scare.hint,"shortest burst first; answer like P2");
+        strcpy(a->scare.hint,"shortest burst first - answer the process number, e.g. 2 (or P2)");
         break; }
     case 2: { /* paging page number */
         int ps=4, la=rng_range(r,5,15);

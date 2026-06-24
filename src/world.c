@@ -33,7 +33,7 @@ static int  g_spawn_x = 1, g_spawn_y = 1;
 static int  g_exit_x = 1,  g_exit_y = 1;
 
 /* ---- cryptic / fourth-wall message pool, built per run ---- */
-#define MSG_MAX 28
+#define MSG_MAX 40
 static char g_msgs[MSG_MAX][48];
 static int  g_msglen[MSG_MAX];
 static int  g_nmsg = 0;
@@ -41,10 +41,12 @@ static int  g_nmsg = 0;
 /* ---- the player's own photos, loaded once, corrupted onto walls ---- */
 static ImageSet g_imgs;
 static int      g_imgs_tried = 0;
+static double   g_static_t = 0;     /* radio-static cadence (shrinks as the monster nears) */
 
 #define TAG_PLAIN 0
 #define TAG_MSG   1
 #define TAG_IMAGE 2
+#define TAG_SIGIL 3
 
 static int is_wall(int ix, int iy){
     if (ix < 0 || iy < 0 || ix >= g_mw || iy >= g_mh) return 1;
@@ -234,6 +236,15 @@ static void build_messages(App *a){
     PUSH("DONT LOOK BACK");
     PUSH("MEMORY LEAK: YOU");
     PUSH("DEADLOCK");
+    /* demonic / daemon puns - the machine is possessed */
+    PUSH("THE daemon() HAS YOU");
+    PUSH("fork() AND BURN");
+    PUSH("666 PROCESSES RUNNING");
+    PUSH("kmalloc(YOUR SOUL)");
+    PUSH("AVE 0xSATAN");
+    PUSH("THE KERNEL HUNGERS");
+    PUSH("SIGKILL CANT SAVE YOU");
+    PUSH("DEUS DEEST");
     /* weave in the player's own files - the deepest cut */
     for (int i = 0; i < g_imgs.nnames && g_nmsg < MSG_MAX; i++){
         if ((i & 1) == 0) PUSH("%s IS MINE NOW", g_imgs.names[i]);
@@ -258,11 +269,12 @@ static void tag_walls(uint64_t *rng){
             }
             if (!borders) continue;
             int roll = rng_range(rng,0,99);
-            if (roll < 22){ g_tag[y][x] = TAG_MSG;  g_idx[y][x] = (unsigned char)rng_range(rng,0,g_nmsg-1); }
-            else if (roll < 40){ g_tag[y][x] = TAG_IMAGE;
+            if (roll < 20){ g_tag[y][x] = TAG_MSG;  g_idx[y][x] = (unsigned char)rng_range(rng,0,g_nmsg-1); }
+            else if (roll < 36){ g_tag[y][x] = TAG_IMAGE;
                 int n = g_imgs.count > 0 ? g_imgs.count : 1;
                 g_idx[y][x] = (unsigned char)rng_range(rng,0,n-1);
             }
+            else if (roll < 46){ g_tag[y][x] = TAG_SIGIL; }    /* demonic summoning sigil */
         }
     }
 }
@@ -335,6 +347,7 @@ void world_enter(App *a){
     a->world.mouse_ready = 0;
     a->world.mpath_t = 0;
     a->world.hp = 50; a->world.hit_cd = 0; a->world.hurt_t = 0;
+    g_static_t = 0;
     a->world.pcellx = g_spawn_x; a->world.pcelly = g_spawn_y;
     rebuild_path(g_spawn_x, g_spawn_y);
     gfx_phosphor_reset(&a->fb);
@@ -416,8 +429,9 @@ void world_update(App *a, double dt){
         a->world.monster_on = 1;
         a->world.warn_t = 3800;
         a->world.msg = rng_range(&a->rng, 0, 2);
-        audio_sfx(SFX_SKULL, 0);
         audio_silence(150);
+        audio_sfx(SFX_SKULL, 0);
+        audio_sfx(SFX_SIREN, 0);          /* the Otherworld shift - air-raid wail */
     }
     if (a->world.warn_t > 0) a->world.warn_t -= dt;
 
@@ -452,10 +466,23 @@ void world_update(App *a, double dt){
         if (!blocked(nmx, a->world.my)) a->world.mx = nmx;
         if (!blocked(a->world.mx, nmy)) a->world.my = nmy;
 
+        double dx = a->world.px - a->world.mx, dy = a->world.py - a->world.my;
+        double pdist2 = dx*dx + dy*dy;
+
+        /* radio static: crackles faster the closer the monster is (Silent Hill radio) */
+        g_static_t -= dt;
+        if (g_static_t <= 0){
+            double d = sqrt(pdist2);
+            if (d < 7.0){
+                double prox = 1.0 - d/7.0;
+                audio_sfx(SFX_STATIC, (float)prox);
+                g_static_t = 1500.0 - 1320.0*prox;     /* ~1500ms far -> ~180ms close */
+            } else g_static_t = 700.0;
+        }
+
         /* damage: when near, the monster claws for 10 HP at most once per second */
         if (a->world.hit_cd > 0) a->world.hit_cd -= dt;
-        double dx = a->world.px - a->world.mx, dy = a->world.py - a->world.my;
-        if (dx*dx + dy*dy < 1.0 && a->world.hit_cd <= 0){   /* "near" ~1 cell */
+        if (pdist2 < 1.0 && a->world.hit_cd <= 0){   /* "near" ~1 cell */
             a->world.hp -= 10;
             a->world.hit_cd = 1000;
             a->world.hurt_t = 450;                          /* red corruption flash */
@@ -493,58 +520,137 @@ static int text_lit(const char *msg, int n, double u, double v, double vlo, doub
     return microfont_pixel(msg[ci], col, row);
 }
 
-/* corrupted machine-guts wall texel - STABLE (seeded by cell, no per-frame RNG) so
-   the walls read as solid surfaces instead of boiling static. */
-static uint32_t wall_base(int cx, int cy, int side, double u, double v, double sh){
-    unsigned ch = cellhash(cx, cy, side, 0, 0);
-    int baseg = 22 + (int)(ch & 15);              /* dim teal-green base, slight per-cell variation */
-    int baseb = 10 + (int)((ch>>4) & 7);
-    double grad = 1.0 - fabs(v-0.5)*0.5;          /* soft vertical gradient, brighter mid */
-    int r = 2, g = (int)(baseg*grad), b = (int)(baseb*grad);
+/* Wall material per cell (stable, no per-frame boil): the Otherworld is rusted/bloody
+   metal, flesh and wire grating fused with the corrupted machine. */
+static uint32_t wall_base(App *a, int cx, int cy, int side, double u, double v, double sh){
+    int mat = (int)(cellhash(cx, cy, 9, 0, 0) % 5);   /* cell-only -> one surface per wall */
     int tx = (int)(u * 12.0), ty = (int)(v * 18.0);
-    if ((cellhash(cx,cy,side,tx,0) & 7) == 0){ g += 26; b += 8; }      /* vertical circuit trace */
     unsigned gh = cellhash(cx, cy, side, tx, ty);
-    if      ((gh & 63) == 0){ g += 70; b += 20; r += 4; }             /* sparse bright data glint */
-    else if ((gh & 31) == 0){ g += 26; }                             /* dim data fleck */
-    if ((gh & 255) == 0){ r += 120; g = g/2; }                       /* rare red corruption fleck */
+    double grad = 1.0 - fabs(v-0.5)*0.5;              /* soft vertical light gradient */
+    int r, g, b;
+
+    switch (mat){
+    case 0: { /* CIRCUIT - the OS identity (corrupted-computer green/hex) */
+        int baseg = 22 + (int)(cellhash(cx,cy,side,0,0) & 15), baseb = 10 + (int)((cellhash(cx,cy,side,1,0)>>4)&7);
+        r = 2; g = (int)(baseg*grad); b = (int)(baseb*grad);
+        if ((cellhash(cx,cy,side,tx,0) & 7) == 0){ g += 26; b += 8; }    /* circuit trace */
+        if      ((gh & 63) == 0){ g += 70; b += 20; r += 4; }
+        else if ((gh & 31) == 0){ g += 26; }
+        if ((gh & 255) == 0){ r += 120; g = g/2; }
+        break; }
+    case 1: { /* RUST - pitted orange-brown metal */
+        int base = 20 + (int)(gh & 15);
+        r = (int)((40 + base)*grad); g = (int)((20 + base/2)*grad); b = (int)(8*grad);
+        if ((cellhash(cx,cy,side,tx,0) & 3) == 0){ r += 18; g += 6; }    /* vertical streaks */
+        if ((gh & 31) == 0){ r -= 14; g -= 8; }                          /* dark pits */
+        if ((gh & 127) == 0){ g += 30; b += 8; }                         /* faint data glyph fleck */
+        break; }
+    case 2: { /* BLEEDING METAL - dark steel with blood running down from the top */
+        int base = 16 + (int)(gh & 7);
+        r = (int)(base*grad); g = (int)(base*grad); b = (int)((base+4)*grad);
+        unsigned col = cellhash(cx,cy,side,tx,0);
+        double driplen = 0.25 + (col & 15)/15.0*0.6;                     /* per-column drip depth */
+        if ((col & 3) == 0 && v < driplen){
+            int rr = 90 + (int)(gh & 63);
+            r = (int)(rr*grad); g = (int)((rr/8)*grad); b = (int)((rr/10)*grad);  /* blood */
+        }
+        break; }
+    case 3: { /* FLESH - organic, faintly breathing, veined */
+        double breath = 0.85 + 0.15*sin(a->now_ms/900.0 + (cx*0.7+cy*1.3));
+        int base = (int)((44 + (gh & 15)) * grad * breath);
+        r = base; g = (int)(base*0.30); b = (int)(base*0.28);
+        if ((cellhash(cx,cy,side,0,ty) & 7) == 0){ r += 18; g += 6; }    /* horizontal veins */
+        if ((gh & 63) == 0){ r += 40; }                                  /* glistening */
+        break; }
+    default: { /* GRATING / WIRE - SH chain-link, dark with near-black gaps */
+        int onmesh = (((tx + ty) & 3) == 0) || (((tx - ty) & 3) == 0);   /* diagonal mesh */
+        int base = onmesh ? 34 : 5;
+        r = (int)(base*0.5*grad); g = (int)(base*grad); b = (int)(base*0.7*grad);
+        if (onmesh && (gh & 31) == 0){ r += 60; g = g/2; }               /* rust spot on wire */
+        break; }
+    }
+    /* universal grime: faint stable vertical scratches + dust speckle on every wall */
+    if ((cellhash(cx, cy, side, tx, 7) & 15) == 0){ r = r*78/100; g = g*78/100; b = b*78/100; }
+    if ((gh & 511) == 0){ r += 28; g += 28; b += 28; }
+    if (r<0)r=0;
+    if (g<0)g=0;
+    if (b<0)b=0;
     return scale_rgb(RGB32(r,g,b), sh);
 }
 
-/* sample one of the player's photos (or the desktop screenshot fallback), corrupted */
+/* a demonic sigil etched in glowing blood on the wall: pentagram-ish star + ring +
+   a couple of cursed glyphs. point-in-shape from (u,v); flickers like a dying light. */
+static uint32_t sigil_pixel(App *a, int cx, int cy, int side, double u, double v, double sh){
+    uint32_t base = wall_base(a, cx, cy, side, u, v, sh);
+    double du = u - 0.5, dv = v - 0.5;
+    double rad = sqrt(du*du + dv*dv);
+    double ang = atan2(dv, du);
+    double flick = 0.6 + 0.4*sin(a->now_ms/130.0 + cx + cy);
+    int lit = 0;
+    /* outer ring of the summoning circle */
+    if (rad > 0.34 && rad < 0.40) lit = 1;
+    /* five-point star: spikes every 72 degrees */
+    if (rad < 0.36){
+        double k = ang * 5.0 / (2*PI);
+        double f = k - floor(k);            /* 0..1 within a fifth */
+        double spike = fabs(f - 0.5) * 2.0; /* 0 at edges, 1 at center of the fifth */
+        if (rad < 0.36 * (0.25 + 0.75*spike) + 0.02 &&
+            rad > 0.36 * (0.25 + 0.75*spike) - 0.02) lit = 1;
+    }
+    if (!lit) return base;
+    int glow = (int)((150 + 90*flick) * sh);
+    return RGB32(glow, (int)(glow*0.06), (int)(glow*0.10));   /* blood-red glow */
+}
+
+/* The player's own photo as a CORRUPTED, ANIMATED, Silent-Hill-blended wall surface:
+   it churns (vertical roll + per-band horizontal tear), is inverted, pushed into the
+   dark desaturated green palette, and crawled by moving scanlines/glitch rows + flicker,
+   so it reads as living corruption rather than a clean picture. */
 static uint32_t image_texel(App *a, int which, double u, double v, double sh, unsigned h){
+    double t = a->now_ms;
+    /* animated sampling: slow vertical roll + a horizontal tear that shifts per band */
+    int band = (int)(v*12.0);
+    double tear = ((double)(cellhash(which, band, (int)(t/140.0), 0, 0) & 31) - 15.5)/15.5 * 0.05;
+    double su = u + tear;       su -= floor(su);
+    double sv = v + t*0.00002;  sv -= floor(sv);
+
     int r, g, b;
     if (g_imgs.count > 0){
         const uint32_t *buf = g_imgs.px[which % g_imgs.count];
         int d = g_imgs.dim;
-        int sx = (int)(u*d); if (sx<0)sx=0; if (sx>=d)sx=d-1;
-        int sy = (int)(v*d); if (sy<0)sy=0; if (sy>=d)sy=d-1;
-        uint32_t p = buf[sy*d+sx];
-        r=(p>>16)&0xFF; g=(p>>8)&0xFF; b=p&0xFF;
+        int sx=(int)(su*d); if(sx<0)sx=0; if(sx>=d)sx=d-1;
+        int sy=(int)(sv*d); if(sy<0)sy=0; if(sy>=d)sy=d-1;
+        uint32_t p=buf[sy*d+sx]; r=(p>>16)&0xFF; g=(p>>8)&0xFF; b=p&0xFF;
     } else if (a->shot){
-        int sx = (int)(u*a->fb.w); if (sx<0)sx=0; if (sx>=a->fb.w)sx=a->fb.w-1;
-        int sy = (int)(v*a->fb.h); if (sy<0)sy=0; if (sy>=a->fb.h)sy=a->fb.h-1;
-        uint32_t p = a->shot[(size_t)sy*a->fb.w+sx];
-        r=(p>>16)&0xFF; g=(p>>8)&0xFF; b=p&0xFF;
+        int sx=(int)(su*a->fb.w); if(sx<0)sx=0; if(sx>=a->fb.w)sx=a->fb.w-1;
+        int sy=(int)(sv*a->fb.h); if(sy<0)sy=0; if(sy>=a->fb.h)sy=a->fb.h-1;
+        uint32_t p=a->shot[(size_t)sy*a->fb.w+sx]; r=(p>>16)&0xFF; g=(p>>8)&0xFF; b=p&0xFF;
     } else {
-        return wall_base(0,0,which,u,v,sh);
+        return wall_base(a,0,0,which,u,v,sh);
     }
-    /* corrupt: phosphor-green bias, channels crushed, sparse glitch rows */
-    int og = (int)(g*0.75 + (r+b)*0.10 + 22);
-    int or_ = (int)(r*0.35);
-    int ob = (int)(b*0.35);
-    if (((h >> 5) & 15) == 0){ or_ = 160; og = og/3; ob = 12; }   /* bleeding red scanrow */
-    if (or_>255) or_=255;
-    if (og>255) og=255;
-    if (ob>255) ob=255;
-    or_=(int)(or_*sh); og=(int)(og*sh); ob=(int)(ob*sh);
-    return RGB32(or_,og,ob);
+
+    r = 255-r; g = 255-g; b = 255-b;                       /* invert */
+    int luma = (r*54 + g*183 + b*19) >> 8;                 /* blend into sickly green */
+    int og = (int)(luma*0.55 + 24), orr = (int)(luma*0.18), ob = (int)(luma*0.30);
+
+    int scan = ((int)(v*60.0 + t*0.03)) & 3;               /* scrolling scanline darken */
+    if (scan == 0){ og = og*60/100; orr = orr*60/100; ob = ob*60/100; }
+    if ((((int)(v*40.0) + (int)(t*0.02)) % 41) == 0){ og += 90; orr += 20; }  /* traveling glitch row */
+    if (((h>>5) & 15) == 0){ orr = 150; og = og/3; ob = 12; }                 /* bleeding red fleck */
+    double flick = 0.85 + 0.15*sin(t/90.0 + which);        /* subtle flicker */
+    orr=(int)(orr*flick); og=(int)(og*flick); ob=(int)(ob*flick);
+    orr = orr<0?0:(orr>255?255:orr);
+    og  = og<0?0:(og>255?255:og);
+    ob  = ob<0?0:(ob>255?255:ob);
+    return scale_rgb(RGB32(orr,og,ob), sh);
 }
 
 static uint32_t wall_pixel(App *a, int cx, int cy, int side, double u, double v, double sh){
-    if (cx<0||cy<0||cx>=g_mw||cy>=g_mh) return wall_base(cx,cy,side,u,v,sh);
+    if (cx<0||cy<0||cx>=g_mw||cy>=g_mh) return wall_base(a,cx,cy,side,u,v,sh);
     int tag = g_tag[cy][cx];
     unsigned h = cellhash(cx, cy, side, (int)(u*16.0), (int)(v*24.0));
     if (tag == TAG_IMAGE) return image_texel(a, g_idx[cy][cx], u, v, sh, h);
+    if (tag == TAG_SIGIL) return sigil_pixel(a, cx, cy, side, u, v, sh);
     if (tag == TAG_MSG){
         int mi = g_idx[cy][cx] % (g_nmsg>0?g_nmsg:1);
         if (text_lit(g_msgs[mi], g_msglen[mi], u, v, 0.40, 0.60)){
@@ -552,7 +658,7 @@ static uint32_t wall_pixel(App *a, int cx, int cy, int side, double u, double v,
             return RGB32(r,g,b);
         }
     }
-    return wall_base(cx,cy,side,u,v,sh);
+    return wall_base(a,cx,cy,side,u,v,sh);
 }
 
 /* exit "model": an animated glowing portal in place of a flat wall */
@@ -599,9 +705,14 @@ static void render_floor_sky(Framebuffer *fb, App *a, int Wd, int H, int horizon
             int ix = ifloor(fx), iy = ifloor(fy);
             double fracx = fx - ix, fracy = fy - iy;
 
-            /* ---- floor: dark circuit board + perspective messages + path trail ---- */
+            /* ---- floor: grimy circuit board + blood/rust + messages + path trail ---- */
             int fr=2, fg=7, fb_=5;
             if (fracx<0.04||fracx>0.96||fracy<0.04||fracy>0.96){ fg = 30; fb_ = 18; fr = 6; } /* seams */
+            /* soiled ground: stable per-tile blood pools and rust patches */
+            int gtile = (int)(cellhash(ix, iy, 13, 0, 0) % 3);
+            unsigned gm = cellhash(ix, iy, 13, (int)(fracx*5), (int)(fracy*5));
+            if      (gtile==0 && (gm & 3)==0){ fr += 45; fg = fg/2; fb_ = fb_/2; }   /* blood pool */
+            else if (gtile==1 && (gm & 7)==0){ fr += 24; fg += 8;  fb_ = fb_/2; }    /* rust patch */
             unsigned fh = cellhash(ix, iy, 7, 0, 0);
             if ((fh & 7) == 0 && g_nmsg > 0){                          /* this floor tile carries text */
                 int mi = fh % g_nmsg;
@@ -621,12 +732,17 @@ static void render_floor_sky(Framebuffer *fb, App *a, int Wd, int H, int horizon
             fc = blend_col(fc, FOG_COLOR, fogt*0.9);
             frow[x] = fc; if (x+1<Wd) frow[x+1] = fc;
 
-            /* ---- sky/ceiling: cold near-black gradient + sparse digital rain ---- */
+            /* ---- sky/ceiling: cold dark + digital rain + red drips + drifting ash ---- */
             if (have_ceil){
                 int sg = (int)(8 * fsh);
                 unsigned ch = cellhash(ix, iy, 3, timebkt, 0);
                 if ((ch & 31) == 0) sg = (int)((36 + (ch & 31)) * fsh); /* faint falling glyph dots */
-                uint32_t cc = blend_col(RGB32(0, sg, (int)(sg*0.6)), FOG_COLOR, fogt*0.7);
+                int cr = 0, cg = sg, cb = (int)(sg*0.6);
+                unsigned dh = cellhash(ix, 0, 17, (int)(fracx*6), 0);    /* red drips hang down */
+                if ((dh & 7) == 0 && fracy > 0.45){ cr = (int)((38 + (dh & 31)) * fsh); cg = cg/2; cb = cb/2; }
+                unsigned ash = cellhash(ix, iy, 19, (int)(a->now_ms/120), (int)(fracx*8));
+                if ((ash & 255) == 0){ cr += 26; cg += 26; cb += 26; }  /* drifting ash mote */
+                uint32_t cc = blend_col(RGB32(cr, cg, cb), FOG_COLOR, fogt*0.7);
                 crow[x] = cc; if (x+1<Wd) crow[x+1] = cc;
             }
 
@@ -831,6 +947,48 @@ void world_render(App *a){
         }
     }
 
+    /* fleeting apparition: ~1 in 8 of the ~9s windows, a faint dark figure with red eyes
+       fades in and out of the fog at a random bearing. no collision - pure dread. */
+    {
+        int bucket = (int)(a->now_ms / 9000);
+        unsigned ah = hashu((unsigned)bucket*2654435761u ^ 0xA9u);
+        double phase = a->now_ms - bucket*9000.0;
+        if ((ah & 7) == 0 && phase < 1400){
+            double ang = (ah>>3 & 1023)/1024.0 * 2*PI;
+            double pdist = 3.0 + (ah>>13 & 7)*0.4;
+            double sx = cos(ang)*pdist, sy = sin(ang)*pdist;
+            double inv = 1.0/(planex*diry - dirx*planey);
+            double tx = inv*(diry*sx - dirx*sy);
+            double ty = inv*(-planey*sx + planex*sy);
+            if (ty > 0.3){
+                int scx = (int)((Wd/2)*(1.0+tx/ty));
+                int sh2 = (int)(H/ty); if (sh2>H) sh2=H;
+                int sw2 = sh2*2/3, yy0 = horizon - sh2/2, xx0 = scx - sw2/2;
+                double fade = phase<300 ? phase/300.0 : (phase>1100 ? (1400-phase)/300.0 : 1.0);
+                if (fade<0) fade=0;
+                if (fade>1) fade=1;
+                double halfw = sw2*0.5;
+                for (int px=xx0; px<xx0+sw2; px++){
+                    if (px<0||px>=cols) continue;
+                    if (zbuf[px] <= ty) continue;
+                    double u2=(px-scx)/halfw;
+                    for (int py=yy0; py<yy0+sh2; py++){
+                        if (py<0||py>=H) continue;
+                        double v2=(py-yy0)/(double)sh2;
+                        double rad=(v2<0.26)?0.20+0.14*(v2/0.26):0.55-0.30*((v2-0.26)/0.74);
+                        if (fabs(u2)>rad) continue;
+                        uint32_t c=fb->px[(size_t)py*Wd+px];
+                        int keep=100-(int)(72*fade);
+                        int r=((c>>16)&0xFF)*keep/100, g=((c>>8)&0xFF)*keep/100, b=(c&0xFF)*keep/100;
+                        if (v2>0.08&&v2<0.16&&fabs(fabs(u2)-0.11)<0.05) r+=(int)(120*fade);  /* eyes */
+                        if (r>255)r=255;
+                        fb->px[(size_t)py*Wd+px]=RGB32(r,g,b);
+                    }
+                }
+            }
+        }
+    }
+
     /* ---- Silent Hill grade on the low-res buffer (cheap: small buffer) ---- */
     gfx_bloom(fb, 150, 50);                  /* faint green glow */
     gfx_desaturate(fb, 55);                  /* muted, sickly palette */
@@ -838,6 +996,11 @@ void world_render(App *a){
     int tension = a->world.monster_on ? 3 : 1;
     if ((rng_next(&a->rng) & 2047) < tension) gfx_brightness(fb, 72 + (int)(rng_next(&a->rng)%22));
     if (a->world.monster_on && (rng_next(&a->rng) & 255) < 2) gfx_slice_tear(fb, &a->rng, 6, 2);
+    if (a->world.monster_on){                /* the lights die when it's close */
+        double mdx=a->world.px-a->world.mx, mdy=a->world.py-a->world.my;
+        if (mdx*mdx+mdy*mdy < 9.0 && (rng_next(&a->rng)&63) < 7)
+            gfx_brightness(fb, 22 + (int)(rng_next(&a->rng)%28));
+    }
     gfx_grain(fb, &a->rng, 8);               /* heavier film grain */
     gfx_vignette(fb);                        /* tunnel-vision dark edges */
 
@@ -886,8 +1049,12 @@ void world_render(App *a){
     const char *arrow = fabs(rel) < 0.45 ? "  ^ THE PORTAL IS AHEAD"
                       : (rel > 0 ? "  THE PORTAL -> (turn right)" : "  <- THE PORTAL (turn left)");
     fb_text_center(real, RW/2, 40, arrow, COL_DGREEN);
-    if (a->world.elapsed < 7000)
+    if (a->world.elapsed < 7000){
         fb_text_center(real, RW/2, 40 + real->ch_h, "FOLLOW THE GREEN LIGHTS TO THE PORTAL", COL_GREEN);
+        /* clear controls prompt on entry */
+        fb_text_center(real, RW/2, RH/2 - real->ch_h*3, "W A S D  -  MOVE      MOUSE  -  LOOK", COL_WHITE);
+        fb_text_center(real, RW/2, RH/2 - real->ch_h*3 + real->ch_h + 4, "reach the green portal", COL_DGREEN);
+    }
 
     /* drifting sky message (screen-space, slow scroll) */
     if (g_nmsg > 0){
@@ -911,12 +1078,4 @@ void world_render(App *a){
 
     if (a->world.escaped)
         fb_text_center(real, RW/2, RH/2, "THE PORTAL -- YOU CLAWED OUT", COL_GREEN);
-
-    /* crosshair reticle on the look horizon */
-    {
-        int cxr = RW/2, cyr = rhoriz;
-        uint32_t rc = 0x0030C060u;
-        fb_fill_rect(real, cxr-6, cyr,   13, 1, rc);
-        fb_fill_rect(real, cxr,   cyr-6, 1, 13, rc);
-    }
 }

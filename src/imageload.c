@@ -79,23 +79,25 @@ static uint32_t *decode_one(const char *path, int dim){
 
 #define PATHBUF (MAX_PATH*2)
 
-/* collect candidate image paths from one directory (top level only). */
+/* collect candidate image paths from one directory (top level only). caps the number
+   added FROM THIS DIR so one huge folder can't crowd out the others (variety + speed);
+   silently does nothing if the directory doesn't exist. */
 static void scan_dir(const char *dir, char paths[][PATHBUF], char names[][64],
-                     int *n, int cap){
+                     int *n, int cap, int per_dir){
     char pat[PATHBUF];
     snprintf(pat, sizeof(pat), "%s\\*", dir);
     WIN32_FIND_DATAA fd;
     HANDLE h = FindFirstFileA(pat, &fd);
-    if (h == INVALID_HANDLE_VALUE) return;
-    int guard = 0;
+    if (h == INVALID_HANDLE_VALUE) return;                /* folder missing -> ignore */
+    int guard = 0, added = 0;
     do {
-        if (*n >= cap) break;
+        if (*n >= cap || added >= per_dir) break;
         if (guard++ > 8000) break;                       /* never trawl a pathological dir */
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
         if (!has_image_ext(fd.cFileName)) continue;
         snprintf(paths[*n], PATHBUF, "%s\\%s", dir, fd.cFileName);
         snprintf(names[*n], 64, "%s", fd.cFileName);
-        (*n)++;
+        (*n)++; added++;
     } while (FindNextFileA(h, &fd));
     FindClose(h);
 }
@@ -108,8 +110,8 @@ void images_load(ImageSet *set, uint64_t *rng, int max){
     static int ole_ready = 0;
     if (!ole_ready){ OleInitialize(NULL); ole_ready = 1; }
 
-    /* candidate paths from Pictures + Downloads (read-only enumeration) */
-    enum { CAND_CAP = 512 };
+    /* candidate paths crawled (read-only) from the player's common picture folders */
+    enum { CAND_CAP = 1024, PER_DIR = 120 };
     static char paths[CAND_CAP][PATHBUF];
     static char names[CAND_CAP][64];
     int ncand = 0;
@@ -118,9 +120,22 @@ void images_load(ImageSet *set, uint64_t *rng, int max){
     DWORD hl = GetEnvironmentVariableA("USERPROFILE", home, sizeof(home));
     if (hl == 0 || hl >= sizeof(home)) return;           /* no home -> caller falls back */
 
+    static const char *SUBS[] = {
+        "Pictures",
+        "Pictures\\Camera Roll",
+        "Pictures\\Saved Pictures",
+        "Pictures\\Screenshots",
+        "Desktop",
+        "Downloads",
+        "OneDrive\\Pictures",
+        "OneDrive\\Pictures\\Camera Roll",
+        "OneDrive\\Pictures\\Screenshots",
+    };
     char dir[PATHBUF];
-    snprintf(dir, sizeof(dir), "%s\\Pictures", home);  scan_dir(dir, paths, names, &ncand, CAND_CAP);
-    snprintf(dir, sizeof(dir), "%s\\Downloads", home); scan_dir(dir, paths, names, &ncand, CAND_CAP);
+    for (int i = 0; i < (int)(sizeof(SUBS)/sizeof(SUBS[0])); i++){
+        snprintf(dir, sizeof(dir), "%s\\%s", home, SUBS[i]);
+        scan_dir(dir, paths, names, &ncand, CAND_CAP, PER_DIR);
+    }
     if (ncand == 0) return;
 
     /* random unique picks, decoding until we have `max` (or run out of candidates) */
