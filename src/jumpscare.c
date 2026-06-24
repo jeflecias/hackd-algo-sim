@@ -3,12 +3,14 @@
 #include <string.h>
 #include <stdio.h>
 #include <ctype.h>
+#include <math.h>
 
 #define SKULL_PHASE_MS  1600.0
 #define RESULT_PHASE_MS 1700.0
-#define PUZZLE_MS       30000.0
+#define PUZZLE_MS       15000.0      /* 15s solve window */
 
-static int s_stung = 0;   /* has the silence->skull sting fired for this scare? */
+static int    s_stung = 0;   /* has the silence->skull sting fired for this scare? */
+static double s_hb    = 0;   /* heartbeat timer (ms) - accelerates as time runs out */
 
 /* normalize: keep [0-9a-z] only, lowercase */
 static void normalize(char *out, const char *in){
@@ -110,6 +112,7 @@ void jumpscare_trigger(App *a){
     audio_silence(280);
     gfx_phosphor_reset(&a->fb);
     s_stung = 0;
+    s_hb = 0;
 }
 
 void jumpscare_update(App *a, double dt){
@@ -119,6 +122,13 @@ void jumpscare_update(App *a, double dt){
         if (a->scare.phase_time > SKULL_PHASE_MS){ a->scare.phase = 1; a->scare.phase_time = 0; }
     } else if (a->scare.phase == 1){
         a->scare.time_left -= dt;
+        /* heartbeat that quickens as the clock runs out (≈900ms early -> ≈250ms at zero) */
+        s_hb -= dt;
+        if (s_hb <= 0){
+            audio_sfx(SFX_HEART, 0);
+            double frac = a->scare.time_left / PUZZLE_MS; if (frac < 0) frac = 0;
+            s_hb = 250.0 + 650.0 * frac;
+        }
         if (a->scare.time_left <= 0){
             a->scare.time_left = 0;
             a->scare.result = 0;
@@ -223,7 +233,23 @@ void jumpscare_render(App *a){
         fb_fill_rect(fb, 60, y + fb->ch_h*5, barw, fb->ch_h, 0x00200000);
         fb_fill_rect(fb, 60, y + fb->ch_h*5, (int)(barw*frac), fb->ch_h, COL_RED);
         char tc[32]; snprintf(tc,32,"%2d s", secs);
-        fb_text(fb, 60, y + fb->ch_h*6 + 4, tc, frac < 0.34 ? COL_RED : COL_AMBER);
+        int lowblink = (frac < 0.34) && (((int)(a->scare.phase_time/150)) & 1);
+        fb_text(fb, 60, y + fb->ch_h*6 + 4, tc,
+                lowblink ? COL_WHITE : (frac < 0.34 ? COL_RED : COL_AMBER));
+
+        /* urgency: a pulsing red border that thickens + beats faster as time drains */
+        double urg = 1.0 - frac;
+        double beat = 0.5 + 0.5*sin(a->scare.phase_time / (frac > 0.5 ? 260.0 : 130.0));
+        int bt = (int)(5 + urg*20 + beat*urg*18);
+        uint32_t rc = RGB32((int)(110 + 120*beat*urg), 0, 0);
+        fb_fill_rect(fb, 0, 0, fb->w, bt, rc);
+        fb_fill_rect(fb, 0, fb->h-bt, fb->w, bt, rc);
+        fb_fill_rect(fb, 0, 0, bt, fb->h, rc);
+        fb_fill_rect(fb, fb->w-bt, 0, bt, fb->h, rc);
+        if (frac < 0.34){
+            gfx_rgb_split(fb, 2 + (int)(urg*6));
+            if ((rng_next(&a->rng) & 7) == 0) gfx_slice_tear(fb, &a->rng, 12, 2);
+        }
 
         gfx_scanlines(fb, 86);
         return;

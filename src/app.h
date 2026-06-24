@@ -249,6 +249,9 @@ typedef struct {
         int      mouse_ready; /* mouse-look has been centered this session */
         double   mpath_t;     /* ms until next monster path recompute */
         int      pcellx, pcelly; /* player's last grid cell (path-trail rebuild trigger) */
+        double   hp;          /* player health (starts 50); 0 -> catch-jumpscare + lose a life */
+        double   hit_cd;      /* ms until the monster can damage again (1/sec) */
+        double   hurt_t;      /* ms left of the red on-hit corruption flash */
     } world;
 } App;
 
@@ -387,7 +390,7 @@ void dataedit_key_special(App *a, int vk);
 enum {
     SFX_KEY=0, SFX_BOOT, SFX_PAGEFAULT, SFX_HIT, SFX_SEEK, SFX_SWITCH,
     SFX_ALLOC, SFX_NOFIT, SFX_SKULL, SFX_CORRECT, SFX_WRONG, SFX_GLITCH, SFX_DECRYPT,
-    SFX_BREATH, SFX_DRIP, SFX_WHISPER, SFX_SCAN
+    SFX_BREATH, SFX_DRIP, SFX_WHISPER, SFX_SCAN, SFX_HEART, SFX_SCREAM
 };
 void audio_init(void);
 void audio_update(void);     /* call once per frame to refill stream buffers */

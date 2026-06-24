@@ -259,6 +259,17 @@ void audio_sfx(int id, float param){
         for(int i=0;i<5;i++)
             spawn(1,180+i*55,0,0.035,0.045,0.001,0.02,i*0.06);
         break;
+    case SFX_HEART:                      /* strong standalone lub-dub thump */
+        spawn(0,58,42,0.18,0.34,0.004,0.12,0.00);   /* lub */
+        spawn(0,55,40,0.16,0.26,0.004,0.12,0.16);   /* dub */
+        spawn(3,0,0,0.05,0.06,0.002,0.04,0.00);     /* tiny body thud */
+        break;
+    case SFX_SCREAM:                     /* corrupted scream: detuned saw fall + screech + noise */
+        spawn(2,540,150,0.55,0.20,0.01,0.30,0);
+        spawn(2,560,160,0.55,0.16,0.01,0.30,0);     /* detune -> ugly beat */
+        spawn(0,1700,420,0.45,0.12,0.01,0.28,0.02); /* ring-mod-ish screech sweep */
+        spawn(3,0,0,0.55,0.20,0.02,0.40,0);         /* breathy noise body */
+        break;
     default: break;
     }
 }

@@ -77,7 +77,7 @@ static void update(double dt){
         case ST_SKULL_REVEAL: lvl = 0.72; break;
         case ST_JUMPSCARE:
             lvl = (a->scare.phase == 1)
-                ? 0.45 + 0.50 * (1.0 - a->scare.time_left / 30000.0)  /* rises as timer drains */
+                ? 0.45 + 0.50 * (1.0 - a->scare.time_left / 15000.0)  /* rises as timer drains */
                 : 0.85;
             break;
         case ST_FOURTHWALL: lvl = 0.62; break;

@@ -17,8 +17,10 @@
 #include <math.h>
 
 #define PI       3.14159265358979
-#define GEN_W    31          /* odd: standard maze carving           */
+#define GEN_W    31          /* real grid (3 cells per logical room: 2 open + 1 wall) */
 #define GEN_H    21
+#define LW       ((GEN_W-1)/3)   /* logical rooms across (each -> 2x2 open room)       */
+#define LH       ((GEN_H-1)/3)   /* logical rooms down                                  */
 #define MAXVIEW  5.0         /* cells before the fog swallows it (Silent Hill short draw dist) */
 #define MAXCOL   8192        /* per-column wall depth buffer          */
 
@@ -155,26 +157,44 @@ static void rebuild_path(int sx, int sy){
     }
 }
 
-/* carve a perfect maze with an iterative randomized DFS over odd cells */
+/* open a logical room as a 2x2 block of floor (origin lx*3+1, ly*3+1) */
+static void open_room(int lx, int ly){
+    int ox = lx*3+1, oy = ly*3+1;
+    g_grid[oy][ox]     = '.'; g_grid[oy][ox+1]   = '.';
+    g_grid[oy+1][ox]   = '.'; g_grid[oy+1][ox+1] = '.';
+}
+/* open the 2-wide doorway through the 1-cell wall toward neighbor (dx,dy) */
+static void open_door(int lx, int ly, int dx, int dy){
+    int ox = lx*3+1, oy = ly*3+1;
+    if      (dx ==  1){ g_grid[oy][ox+2] = '.'; g_grid[oy+1][ox+2] = '.'; }
+    else if (dx == -1){ g_grid[oy][ox-1] = '.'; g_grid[oy+1][ox-1] = '.'; }
+    else if (dy ==  1){ g_grid[oy+2][ox] = '.'; g_grid[oy+2][ox+1] = '.'; }
+    else              { g_grid[oy-1][ox] = '.'; g_grid[oy-1][ox+1] = '.'; }
+}
+
+/* carve a maze of 2x2 ROOMS joined by 2-wide doorways (wide enough to dodge in),
+   via randomized DFS over a coarse logical grid (LW x LH). */
 static void carve(uint64_t *rng){
     for (int y = 0; y < g_mh; y++) for (int x = 0; x < g_mw; x++) g_grid[y][x] = '#';
-    static int stk[GEN_W*GEN_H]; int sp = 0;
-    g_grid[1][1] = '.';
-    stk[sp++] = 1*g_mw + 1;
-    static const int DX[4] = {2,-2,0,0}, DY[4] = {0,0,2,-2};
+    static unsigned char vis[LW*LH];
+    for (int i = 0; i < LW*LH; i++) vis[i] = 0;
+    static int stk[LW*LH]; int sp = 0;
+    open_room(0,0); vis[0] = 1; stk[sp++] = 0;
+    static const int DX[4] = {1,-1,0,0}, DY[4] = {0,0,1,-1};
     while (sp > 0){
-        int cur = stk[sp-1]; int cx = cur % g_mw, cy = cur / g_mw;
+        int cur = stk[sp-1]; int lx = cur % LW, ly = cur / LW;
         int order[4] = {0,1,2,3};
         for (int i = 3; i > 0; i--){ int j = rng_range(rng,0,i); int t=order[i];order[i]=order[j];order[j]=t; }
         int advanced = 0;
         for (int i = 0; i < 4; i++){
             int d = order[i];
-            int nx = cx+DX[d], ny = cy+DY[d];
-            if (nx<=0||ny<=0||nx>=g_mw-1||ny>=g_mh-1) continue;
-            if (g_grid[ny][nx] != '#') continue;            /* already carved */
-            g_grid[cy+DY[d]/2][cx+DX[d]/2] = '.';           /* knock the wall between */
-            g_grid[ny][nx] = '.';
-            stk[sp++] = ny*g_mw+nx;
+            int nlx = lx+DX[d], nly = ly+DY[d];
+            if (nlx<0||nly<0||nlx>=LW||nly>=LH) continue;
+            if (vis[nly*LW+nlx]) continue;
+            open_room(nlx, nly);
+            open_door(lx, ly, DX[d], DY[d]);
+            vis[nly*LW+nlx] = 1;
+            stk[sp++] = nly*LW+nlx;
             advanced = 1; break;
         }
         if (!advanced) sp--;
@@ -269,7 +289,7 @@ static void generate_maze(App *a){
         /* scatter pillar obstacles "in between", each validated so the maze stays solvable */
         int floor_cells = 0;
         for (int i = 0; i < g_mw*g_mh; i++) if (((char*)g_grid)[i] == '.') floor_cells++;
-        int want = floor_cells / 10;
+        int want = floor_cells / 22;            /* sparse pillars - rooms stay open to dodge in */
         for (int t = 0; t < want*3 && want > 0; t++){
             int x = rng_range(rng,1,g_mw-2), y = rng_range(rng,1,g_mh-2);
             if (g_grid[y][x] != '.') continue;
@@ -314,6 +334,7 @@ void world_enter(App *a){
     a->world.pitch = 0;
     a->world.mouse_ready = 0;
     a->world.mpath_t = 0;
+    a->world.hp = 50; a->world.hit_cd = 0; a->world.hurt_t = 0;
     a->world.pcellx = g_spawn_x; a->world.pcelly = g_spawn_y;
     rebuild_path(g_spawn_x, g_spawn_y);
     gfx_phosphor_reset(&a->fb);
@@ -354,9 +375,9 @@ void world_update(App *a, double dt){
         int cx = a->fb.w/2, cy = a->fb.h/2;
         POINT pt; GetCursorPos(&pt);
         if (a->world.mouse_ready){
-            a->world.dir   += (pt.x - cx) * 0.0022;
-            a->world.pitch -= (pt.y - cy) * 0.9;
-            double pmax = a->fb.h / 3.0;
+            a->world.dir   += (pt.x - cx) * 0.0022;        /* yaw: unbounded 360       */
+            a->world.pitch -= (pt.y - cy) * 1.30;          /* pitch: look up/down       */
+            double pmax = a->fb.h * 0.60;                  /* generous vertical range   */
             if (a->world.pitch >  pmax) a->world.pitch =  pmax;
             if (a->world.pitch < -pmax) a->world.pitch = -pmax;
         } else a->world.mouse_ready = 1;
@@ -431,15 +452,24 @@ void world_update(App *a, double dt){
         if (!blocked(nmx, a->world.my)) a->world.mx = nmx;
         if (!blocked(a->world.mx, nmy)) a->world.my = nmy;
 
+        /* damage: when near, the monster claws for 10 HP at most once per second */
+        if (a->world.hit_cd > 0) a->world.hit_cd -= dt;
         double dx = a->world.px - a->world.mx, dy = a->world.py - a->world.my;
-        if (dx*dx + dy*dy < 0.36){             /* caught (dist < 0.6) -> jumpscare phase */
-            a->world.caught = 1; a->world.caught_t = 0;
-            audio_silence(120);
-            audio_sfx(SFX_SKULL, 0);
-            audio_sfx(SFX_WRONG, 0);
-            return;
+        if (dx*dx + dy*dy < 1.0 && a->world.hit_cd <= 0){   /* "near" ~1 cell */
+            a->world.hp -= 10;
+            a->world.hit_cd = 1000;
+            a->world.hurt_t = 450;                          /* red corruption flash */
+            audio_sfx(SFX_SCREAM, 0);
+            if (a->world.hp <= 0){                          /* drained -> catch jumpscare -> lose a life */
+                a->world.caught = 1; a->world.caught_t = 0;
+                audio_silence(120);
+                audio_sfx(SFX_SKULL, 0);
+                audio_sfx(SFX_WRONG, 0);
+                return;
+            }
         }
     }
+    if (a->world.hurt_t > 0) a->world.hurt_t -= dt;
 
     /* reached the exit portal? */
     double ex = g_exit_x + 0.5, ey = g_exit_y + 0.5;
@@ -579,9 +609,12 @@ static void render_floor_sky(Framebuffer *fb, App *a, int Wd, int H, int horizon
             }
             if (ix>=0 && iy>=0 && ix<g_mw && iy<g_mh && g_onpath[iy*g_mw+ix]){
                 double cxd=fracx-0.5, cyd=fracy-0.5, dd=cxd*cxd+cyd*cyd;
-                if (dd < 0.16){
-                    int t = (int)((1.0 - dd/0.16) * 150 * trail_pulse);
-                    fr += t/5; fg += t; fb_ += t/3;
+                if (dd < 0.20){
+                    /* a bright wave that flows toward the exit (lower exit-distance) */
+                    int ed = g_exitdist[iy*g_mw+ix]; if (ed < 0) ed = 0;
+                    double flow = 0.5 + 0.5*sin(ed*0.9 + a->now_ms/180.0);
+                    int t = (int)((1.0 - dd/0.20) * (110 + 150*flow) * (0.7+0.3*trail_pulse));
+                    fr += t/4; fg += t; fb_ += t/2;        /* glowing green-cyan trail */
                 }
             }
             uint32_t fc = scale_rgb(RGB32(fr,fg,fb_), fsh);
@@ -655,8 +688,8 @@ void world_render(App *a){
 
     double pitch_lo = a->world.pitch * H / (double)real->h;   /* scale pitch into low-res */
     int horizon = H/2 + (int)pitch_lo;
-    if (horizon < H/6) horizon = H/6;
-    if (horizon > H*5/6) horizon = H*5/6;
+    if (horizon < H/8)   horizon = H/8;
+    if (horizon > H*7/8) horizon = H*7/8;
 
     render_floor_sky(fb, a, Wd, H, horizon, posx, posy, dirx, diry, planex, planey);
 
@@ -714,6 +747,36 @@ void world_render(App *a){
             if (x+1 < Wd) fb->px[(size_t)y*Wd + x+1] = col;
         }
         zbuf[x] = perp; if (x+1 < cols) zbuf[x+1] = perp;
+    }
+
+    /* exit beacon: a pulsing pillar of green light at the portal, shining through the
+       fog (depth-tested, so it only shows with line of sight) - tells you where to go. */
+    {
+        double bx = (g_exit_x+0.5) - posx, by = (g_exit_y+0.5) - posy;
+        double inv = 1.0 / (planex*diry - dirx*planey);
+        double btx = inv * (diry*bx - dirx*by);
+        double bty = inv * (-planey*bx + planex*by);
+        if (bty > 0.15){
+            int scx = (int)((Wd/2) * (1.0 + btx/bty));
+            int half = 1 + (int)(3.0/bty);
+            double pulse = 0.6 + 0.4*sin(a->now_ms/220.0);
+            int inten = (int)((90 + 90*pulse) / (1.0 + bty*0.5));
+            for (int px = scx-half; px <= scx+half; px++){
+                if (px < 0 || px >= cols) continue;
+                if (zbuf[px] <= bty) continue;                    /* occluded by a wall */
+                double edge = 1.0 - (double)abs(px-scx)/(half+1);
+                for (int y = 0; y < H; y++){
+                    double vy = 1.0 - fabs(y - horizon)/(double)H;
+                    int add = (int)(inten * edge * vy);
+                    if (add <= 0) continue;
+                    uint32_t c = fb->px[(size_t)y*Wd+px];
+                    int r = ((c>>16)&0xFF)+add/4; if (r>255) r=255;
+                    int g = ((c>>8)&0xFF)+add;    if (g>255) g=255;
+                    int b = (c&0xFF)+add/2;       if (b>255) b=255;
+                    fb->px[(size_t)y*Wd+px] = RGB32(r,g,b);
+                }
+            }
+        }
     }
 
     /* the monster: an unreadable code-error billboard, depth-tested per column.
@@ -783,15 +846,39 @@ void world_render(App *a){
 
     /* ---- text / HUD / reticle at full resolution (crisp) ---- */
     int RW = real->w, RH = real->h;
-    int rhoriz = RH/2 + (int)a->world.pitch;
-    if (rhoriz < RH/6) rhoriz = RH/6;
-    if (rhoriz > RH*5/6) rhoriz = RH*5/6;
+    int rhoriz = horizon * RH / H;          /* reticle on the SAME line the world tilts to */
+
+    /* red corruption flash when the monster lands a hit */
+    if (a->world.hurt_t > 0){
+        double hk = a->world.hurt_t / 450.0; if (hk > 1) hk = 1;
+        int add = (int)(160*hk), keep = 100 - (int)(45*hk);
+        for (int y = 0; y < RH; y++){
+            uint32_t *row = real->px + (size_t)y*RW;
+            for (int x = 0; x < RW; x++){
+                uint32_t c = row[x];
+                int r = ((c>>16)&0xFF) + add; if (r>255) r=255;
+                int g = ((c>>8)&0xFF) * keep/100;
+                int b = (c&0xFF)      * keep/100;
+                row[x] = RGB32(r,g,b);
+            }
+        }
+        if (hk > 0.3) gfx_rgb_split(real, (int)(7*hk));
+    }
 
     if (mon_on)
         fb_text(real, mon_sx*RW/Wd - (int)strlen(mon_err)*real->ch_w/2, rhoriz, mon_err, COL_RED);
 
+    /* HUD: lives + a health bar */
     char hud[64]; snprintf(hud, sizeof(hud), "LIVES: %d", a->lives);
     fb_text(real, 20, 20, hud, a->lives > 1 ? COL_RED : COL_WHITE);
+    int hp = (int)a->world.hp; if (hp < 0) hp = 0;
+    char hpt[32]; snprintf(hpt, sizeof(hpt), "HP %d/50", hp);
+    fb_text(real, 20, 20 + real->ch_h, hpt, hp > 20 ? COL_GREEN : COL_RED);
+    int barw = real->ch_w * 16, barh = real->ch_h - 4;
+    int bx = 20, by = 22 + real->ch_h*2;
+    fb_fill_rect(real, bx, by, barw, barh, 0x00200000);
+    fb_fill_rect(real, bx, by, barw*hp/50, barh, hp > 20 ? COL_GREEN : COL_RED);
+    fb_frame(real, bx, by, barw, barh, COL_DGREEN);
 
     double rel = atan2((g_exit_y + 0.5) - posy, (g_exit_x + 0.5) - posx) - dir;
     while (rel >  PI) rel -= 2*PI;
@@ -799,6 +886,8 @@ void world_render(App *a){
     const char *arrow = fabs(rel) < 0.45 ? "  ^ THE PORTAL IS AHEAD"
                       : (rel > 0 ? "  THE PORTAL -> (turn right)" : "  <- THE PORTAL (turn left)");
     fb_text_center(real, RW/2, 40, arrow, COL_DGREEN);
+    if (a->world.elapsed < 7000)
+        fb_text_center(real, RW/2, 40 + real->ch_h, "FOLLOW THE GREEN LIGHTS TO THE PORTAL", COL_GREEN);
 
     /* drifting sky message (screen-space, slow scroll) */
     if (g_nmsg > 0){
