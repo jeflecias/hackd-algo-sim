@@ -21,10 +21,8 @@ static void normalize(char *out, const char *in){
 }
 
 void jumpscare_schedule(App *a){
-    /* the parasite feeds: scares come faster the more it has claimed */
-    int lo = 60000 - a->kills*7000;  if (lo < 18000) lo = 18000;
-    int hi = 180000 - a->kills*15000; if (hi < lo + 20000) hi = lo + 20000;
-    a->scare_at = a->now_ms + rng_range(&a->rng, lo, hi);
+    /* random 30-60s between scares */
+    a->scare_at = a->now_ms + rng_range(&a->rng, 30000, 60000);
     a->scare_pending = 0;
 }
 
@@ -124,6 +122,7 @@ void jumpscare_update(App *a, double dt){
         if (a->scare.time_left <= 0){
             a->scare.time_left = 0;
             a->scare.result = 0;
+            a->kills += 1;
             strcpy(a->scare.res1, "TOO SLOW.");
             strcpy(a->scare.res2, "the parasite feeds.");
             a->scare.phase = 2; a->scare.phase_time = 0;
@@ -131,12 +130,15 @@ void jumpscare_update(App *a, double dt){
         }
     } else { /* phase 2: result */
         if (a->scare.phase_time > RESULT_PHASE_MS){
-            a->state = ST_TERMINAL;
-            a->state_time = 0;
-            jumpscare_schedule(a);
-            term_print(&a->term, a->scare.result ? COL_GREEN : COL_RED,
-                       a->scare.result ? "[survived the skull -- continue]"
-                                       : "[the skull claimed a point -- continue]");
+            if (a->scare.result){
+                a->state = ST_TERMINAL;
+                a->state_time = 0;
+                jumpscare_schedule(a);
+                term_print(&a->term, COL_GREEN, "[survived the skull -- continue]");
+            } else {
+                /* failure drags you out of the machine and into the other world */
+                fourthwall_enter(a);
+            }
         }
     }
 }

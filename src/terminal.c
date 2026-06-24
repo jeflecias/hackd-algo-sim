@@ -94,6 +94,9 @@ void term_render(App *a){
     Terminal *t = &a->term;
     fb_clear(fb, COL_BG);
 
+    /* the shell rots as lives are consumed in the other world (0..3) */
+    int rot = 3 - a->lives; if (rot < 0) rot = 0; if (rot > 3) rot = 3;
+
     int ch = fb->ch_h;
     int status_h = ch + 10;
     int input_y  = fb->h - status_h - ch - 6;
@@ -104,10 +107,11 @@ void term_render(App *a){
     int y = MARGIN;
     for (int i = start; i < t->count; i++){
         int idx = (t->head + i) % TERM_SCROLLBK;
-        /* rarely corrupt a line's glyphs for a frame (the parasite bleeds through) */
-        if ((rng_next(&a->rng) & 1023) < 5){
+        /* rarely corrupt a line's glyphs for a frame (the parasite bleeds through);
+           the corruption spreads as lives are lost */
+        if ((rng_next(&a->rng) & 1023) < 5 + rot*45){
             char g[TERM_MAXLINE];
-            fb_garble(g, t->lines[idx].text, &a->rng, 18);
+            fb_garble(g, t->lines[idx].text, &a->rng, 18 + rot*16);
             fb_text(fb, MARGIN, y, g, COL_RED);
         } else {
             fb_text(fb, MARGIN, y, t->lines[idx].text, t->lines[idx].color);
@@ -134,8 +138,8 @@ void term_render(App *a){
     fb_fill_rect(fb, 0, fb->h - status_h, fb->w, status_h, 0x00101810);
     char sb[256];
     snprintf(sb, sizeof(sb),
-        " [ DEADLOCK v6.6.6 ]  modules:4-7 loaded  victims:%d  type 'help' or 'edit'  |  ESC=panic-exit",
-        a->kills);
+        " [ DEADLOCK v6.6.6 ]  modules:4-7 loaded  victims:%d  lives:%d  type 'help'  |  ESC=panic-exit",
+        a->kills, a->lives);
     fb_text(fb, 8, sy, sb, COL_DGREEN);
     /* live-intrusion HUD on the right */
     int cw = fb->ch_w;
@@ -148,6 +152,10 @@ void term_render(App *a){
 
     /* occasional power flicker / darkness pulse */
     if ((rng_next(&a->rng) & 1023) < 4) gfx_brightness(fb, 55 + (int)(rng_next(&a->rng)%30));
+    /* lives-scaled decay: signal can't hold as the parasite wins */
+    if (rot >= 1 && (int)(rng_next(&a->rng) & 7) < rot) gfx_rgb_split(fb, rot);
+    if (rot >= 2) gfx_slice_tear(fb, &a->rng, 10 + rot*8, rot);
+    if (rot >= 2 && (int)(rng_next(&a->rng) & 31) < rot) gfx_datamosh(fb, &a->rng, 0, 0, fb->w, fb->h);
     /* subtle scanlines for CRT feel */
     gfx_scanlines(fb, 88);
 }

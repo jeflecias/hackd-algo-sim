@@ -91,6 +91,9 @@ typedef enum {
     ST_ANIM,
     ST_DATAEDIT,
     ST_JUMPSCARE,
+    ST_FOURTHWALL,   /* lose: real desktop + identity reveal, then zoom out of the monitor */
+    ST_WORLD,        /* lose: 3D corrupted maze you must escape on foot */
+    ST_GAMEOVER,     /* lives exhausted: fully corrupted message, then exit */
     ST_QUIT
 } AppState;
 
@@ -185,6 +188,7 @@ typedef struct {
     double      scare_at;     /* ms (app clock) of next jumpscare */
     int         scare_pending;/* queued because an animation was running */
     int         kills;        /* cosmetic counter */
+    int         lives;        /* lose-sequence lives (start 3); 0 -> ST_GAMEOVER + exit */
 
     /* jumpscare puzzle runtime */
     struct {
@@ -213,6 +217,28 @@ typedef struct {
         double   glitch;      /* ms of write-glitch left after a commit */
         double   t;           /* local clock for caret/skull */
     } edit;
+
+    /* fourth-wall reveal + zoom-out (ST_FOURTHWALL) and corrupted exit (ST_GAMEOVER) */
+    struct {
+        int      phase;
+        double   t;           /* ms within current phase */
+        char     user[64];    /* GetUserNameA          */
+        char     host[64];    /* GetComputerNameA      */
+        char     when[16];    /* "HH:MM" local time    */
+    } fw;
+
+    /* 3D escape world (ST_WORLD) */
+    struct {
+        double   px, py, dir; /* player position (cell units) + heading (radians) */
+        double   mx, my;      /* monster position (cell units) */
+        int      monster_on;  /* monster active (spawns after the warning) */
+        double   elapsed;     /* ms since entering the world */
+        int      warned;      /* "I AM COMING FOR YOU" banner has fired */
+        double   warn_t;      /* ms left to show the warning banner overlay */
+        double   flash;       /* ms left of an escape/catch flash */
+        int      escaped;     /* set when the exit is reached */
+        int      msg;         /* which warning variant is showing */
+    } world;
 } App;
 
 extern App g_app;
@@ -241,6 +267,7 @@ void fb_present(Framebuffer *fb, HDC dst);
 void fb_fill_rect(Framebuffer *fb, int x, int y, int w, int h, uint32_t c);
 void fb_text(Framebuffer *fb, int x, int y, const char *s, uint32_t c);
 void fb_blit_shot(Framebuffer *fb, const uint32_t *shot);
+void fb_blit_shot_rect(Framebuffer *fb, const uint32_t *shot, int dx, int dy, int dw, int dh);
 void fb_frame(Framebuffer *fb, int x, int y, int w, int h, uint32_t c);  /* outline */
 void fb_box(Framebuffer *fb, int x, int y, int w, int h, uint32_t c);    /* TUI frame + corner brackets */
 void fb_text_center(Framebuffer *fb, int cx, int y, const char *s, uint32_t c);
@@ -299,6 +326,19 @@ void jumpscare_key_special(App *a, int vk);
 
 /* ---- screenshot.c ---- */
 uint32_t *screenshot_capture(int w, int h);
+
+/* ---- fourthwall.c (lose: desktop/identity reveal, zoom-out, corrupted exit) ---- */
+void fourthwall_enter(App *a);
+void fourthwall_update(App *a, double dt);
+void fourthwall_render(App *a);
+void gameover_enter(App *a);
+void gameover_update(App *a, double dt);
+void gameover_render(App *a);
+
+/* ---- world.c (lose: 3D raycast escape maze + code-error monster) ---- */
+void world_enter(App *a);
+void world_update(App *a, double dt);
+void world_render(App *a);
 
 /* ---- dataedit.c (interactive data editor, ST_DATAEDIT) ---- */
 void dataedit_open(App *a);

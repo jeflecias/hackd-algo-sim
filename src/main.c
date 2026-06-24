@@ -32,6 +32,15 @@ static void update(double dt){
     case ST_JUMPSCARE:
         jumpscare_update(a, dt);
         break;
+    case ST_FOURTHWALL:
+        fourthwall_update(a, dt);
+        break;
+    case ST_WORLD:
+        world_update(a, dt);
+        break;
+    case ST_GAMEOVER:
+        gameover_update(a, dt);
+        break;
     default: break;
     }
 
@@ -71,6 +80,9 @@ static void update(double dt){
                 ? 0.45 + 0.50 * (1.0 - a->scare.time_left / 30000.0)  /* rises as timer drains */
                 : 0.85;
             break;
+        case ST_FOURTHWALL: lvl = 0.62; break;
+        case ST_WORLD:      lvl = a->world.monster_on ? 0.88 : 0.50; break;
+        case ST_GAMEOVER:   lvl = 0.92; break;
         default: lvl = 0.20; break;
         }
         audio_drone((float)lvl);
@@ -97,6 +109,15 @@ static void render(void){
         break;
     case ST_JUMPSCARE:
         jumpscare_render(a);
+        break;
+    case ST_FOURTHWALL:
+        fourthwall_render(a);
+        break;
+    case ST_WORLD:
+        world_render(a);
+        break;
+    case ST_GAMEOVER:
+        gameover_render(a);
         break;
     default:
         fb_clear(&a->fb, COL_BG);
@@ -131,7 +152,9 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp){
             else dataedit_key_special(a, (int)wp);
             return 0;
         }
-        if (wp == VK_ESCAPE){ a->state = ST_QUIT; PostQuitMessage(0); return 0; }
+        /* ESC = panic-exit only from the shell; inside the world/cinematics you're
+           trapped (Ctrl+Q above is the universal escape hatch) */
+        if (wp == VK_ESCAPE && a->state == ST_TERMINAL){ a->state = ST_QUIT; PostQuitMessage(0); return 0; }
         if (a->state == ST_JUMPSCARE) jumpscare_key_special(a, (int)wp);
         else if (a->state == ST_TERMINAL) term_key_special(a, (int)wp);
         return 0;
@@ -184,6 +207,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmd, int show){
     term_init(&a->term);
     audio_init();
     a->state = ST_GLITCH_INTRO;
+    a->lives = 3;         /* lose-sequence lives; 0 -> corrupted exit */
     a->scare_at = 1e18;   /* not scheduled until the shell is reached */
 
     ShowWindow(a->hwnd, SW_SHOW);

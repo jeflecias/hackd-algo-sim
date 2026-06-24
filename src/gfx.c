@@ -128,6 +128,25 @@ void fb_blit_shot(Framebuffer *fb, const uint32_t *shot){
     memcpy(fb->px, shot, (size_t)fb->w * fb->h * 4);
 }
 
+/* nearest-neighbor scale the full-res desktop shot into rect (dx,dy,dw,dh), clipped */
+void fb_blit_shot_rect(Framebuffer *fb, const uint32_t *shot, int dx, int dy, int dw, int dh){
+    if (!shot || dw <= 0 || dh <= 0) return;
+    int x0 = dx < 0 ? 0 : dx, y0 = dy < 0 ? 0 : dy;
+    int x1 = dx + dw; if (x1 > fb->w) x1 = fb->w;
+    int y1 = dy + dh; if (y1 > fb->h) y1 = fb->h;
+    for (int y = y0; y < y1; y++){
+        int sy = (int)((double)(y - dy) / dh * fb->h);
+        if (sy < 0) sy = 0; else if (sy >= fb->h) sy = fb->h - 1;
+        const uint32_t *srow = shot + (size_t)sy * fb->w;
+        uint32_t *drow = fb->px + (size_t)y * fb->w;
+        for (int x = x0; x < x1; x++){
+            int sx = (int)((double)(x - dx) / dw * fb->w);
+            if (sx < 0) sx = 0; else if (sx >= fb->w) sx = fb->w - 1;
+            drow[x] = srow[sx];
+        }
+    }
+}
+
 void fb_hline(Framebuffer *fb, int x, int y, int w, uint32_t c){ fb_fill_rect(fb,x,y,w,1,c); }
 void fb_vline(Framebuffer *fb, int x, int y, int h, uint32_t c){ fb_fill_rect(fb,x,y,1,h,c); }
 
