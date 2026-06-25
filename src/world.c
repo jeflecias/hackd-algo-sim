@@ -46,7 +46,7 @@ static double   g_static_t = 0;     /* radio-static cadence (shrinks as the mons
 #define TAG_PLAIN 0
 #define TAG_MSG   1
 #define TAG_IMAGE 2
-#define TAG_SIGIL 3
+#define TAG_COREDUMP 3
 
 static int is_wall(int ix, int iy){
     if (ix < 0 || iy < 0 || ix >= g_mw || iy >= g_mh) return 1;
@@ -225,7 +225,7 @@ static void build_messages(App *a){
     PUSH("RETURN 0 // YOU CANT");
     PUSH("SEGFAULT IN YOU");
     PUSH("WHILE(YOU) SUFFER");
-    PUSH("FREE(YOUR SOUL)");
+    PUSH("SWAPPED OUT");
     PUSH("KERNEL PANIC");
     PUSH("I SEE YOUR STACK");
     PUSH("NO ESCAPE %s", user);
@@ -236,15 +236,16 @@ static void build_messages(App *a){
     PUSH("DONT LOOK BACK");
     PUSH("MEMORY LEAK: YOU");
     PUSH("DEADLOCK");
-    /* demonic / daemon puns - the machine is possessed */
-    PUSH("THE daemon() HAS YOU");
-    PUSH("fork() AND BURN");
-    PUSH("666 PROCESSES RUNNING");
-    PUSH("kmalloc(YOUR SOUL)");
-    PUSH("AVE 0xSATAN");
-    PUSH("THE KERNEL HUNGERS");
-    PUSH("SIGKILL CANT SAVE YOU");
-    PUSH("DEUS DEEST");
+    /* the cycle: deadlock / zombie / swap-to-disk -- you are not the first */
+    PUSH("CIRCULAR WAIT");
+    PUSH("HOLD AND WAIT");
+    PUSH("NO RESOURCE WILL COME");
+    PUSH("ZOMBIE %d UNREAPED", rng_range(&a->rng,1000,9999));
+    PUSH("PAGED OUT TO /swap");
+    PUSH("I WAITED HERE TOO");
+    PUSH("TWO PROCS ONE FRAME");
+    PUSH("YOU'RE NEXT IN QUEUE");
+    PUSH("DINING PHILOSOPHERS NEVER ATE");
     /* weave in the player's own files - the deepest cut */
     for (int i = 0; i < g_imgs.nnames && g_nmsg < MSG_MAX; i++){
         if ((i & 1) == 0) PUSH("%s IS MINE NOW", g_imgs.names[i]);
@@ -274,7 +275,7 @@ static void tag_walls(uint64_t *rng){
                 int n = g_imgs.count > 0 ? g_imgs.count : 1;
                 g_idx[y][x] = (unsigned char)rng_range(rng,0,n-1);
             }
-            else if (roll < 46){ g_tag[y][x] = TAG_SIGIL; }    /* demonic summoning sigil */
+            else if (roll < 46){ g_tag[y][x] = TAG_COREDUMP; }  /* corrupted core dump of the swapped-out process */
         }
     }
 }
@@ -578,28 +579,31 @@ static uint32_t wall_base(App *a, int cx, int cy, int side, double u, double v, 
     return scale_rgb(RGB32(r,g,b), sh);
 }
 
-/* a demonic sigil etched in glowing blood on the wall: pentagram-ish star + ring +
-   a couple of cursed glyphs. point-in-shape from (u,v); flickers like a dying light. */
-static uint32_t sigil_pixel(App *a, int cx, int cy, int side, double u, double v, double sh){
+/* a corrupted core dump etched into the wall: a grid of glowing hex/data cells, the
+   memory image of a process that was swapped out here. Cells flicker and a few bleed red
+   like bad pages. point-sampled from (u,v) so it tiles the wall face. */
+static uint32_t coredump_pixel(App *a, int cx, int cy, int side, double u, double v, double sh){
     uint32_t base = wall_base(a, cx, cy, side, u, v, sh);
-    double du = u - 0.5, dv = v - 0.5;
-    double rad = sqrt(du*du + dv*dv);
-    double ang = atan2(dv, du);
-    double flick = 0.6 + 0.4*sin(a->now_ms/130.0 + cx + cy);
-    int lit = 0;
-    /* outer ring of the summoning circle */
-    if (rad > 0.34 && rad < 0.40) lit = 1;
-    /* five-point star: spikes every 72 degrees */
-    if (rad < 0.36){
-        double k = ang * 5.0 / (2*PI);
-        double f = k - floor(k);            /* 0..1 within a fifth */
-        double spike = fabs(f - 0.5) * 2.0; /* 0 at edges, 1 at center of the fifth */
-        if (rad < 0.36 * (0.25 + 0.75*spike) + 0.02 &&
-            rad > 0.36 * (0.25 + 0.75*spike) - 0.02) lit = 1;
+    const int COLS = 12, ROWS = 8;
+    double gu = u*COLS, gv = v*ROWS;
+    int col = (int)gu, row = (int)gv;
+    double fu = gu - col, fv = gv - row;
+    /* thin gutter between cells -> the grid reads as packed memory words */
+    if (fu < 0.12 || fu > 0.88 || fv < 0.18 || fv > 0.82) return base;
+    unsigned cellh = cellhash(cx, cy, side, col, row);
+    /* time-quantised flicker: each cell toggles on its own slow clock */
+    int tick = (int)(a->now_ms/220.0) + (int)(cellh & 7);
+    if (((cellh >> 3) + tick) & 3) {
+        /* dim resident word */
+        int g = (int)(70*sh); return RGB32((int)(10*sh), g, (int)(28*sh));
     }
-    if (!lit) return base;
-    int glow = (int)((150 + 90*flick) * sh);
-    return RGB32(glow, (int)(glow*0.06), (int)(glow*0.10));   /* blood-red glow */
+    double flick = 0.6 + 0.4*sin(a->now_ms/110.0 + col*3 + row);
+    if ((cellh & 31) == 0){                                  /* a bad page bleeds red */
+        int glow = (int)((150 + 80*flick) * sh);
+        return RGB32(glow, (int)(glow*0.07), (int)(glow*0.12));
+    }
+    int glow = (int)((120 + 90*flick) * sh);                 /* lit data word (sickly amber-green) */
+    return RGB32((int)(glow*0.55), glow, (int)(glow*0.20));
 }
 
 /* The player's own photo as a CORRUPTED, ANIMATED, Silent-Hill-blended wall surface:
@@ -650,7 +654,7 @@ static uint32_t wall_pixel(App *a, int cx, int cy, int side, double u, double v,
     int tag = g_tag[cy][cx];
     unsigned h = cellhash(cx, cy, side, (int)(u*16.0), (int)(v*24.0));
     if (tag == TAG_IMAGE) return image_texel(a, g_idx[cy][cx], u, v, sh, h);
-    if (tag == TAG_SIGIL) return sigil_pixel(a, cx, cy, side, u, v, sh);
+    if (tag == TAG_COREDUMP) return coredump_pixel(a, cx, cy, side, u, v, sh);
     if (tag == TAG_MSG){
         int mi = g_idx[cy][cx] % (g_nmsg>0?g_nmsg:1);
         if (text_lit(g_msgs[mi], g_msglen[mi], u, v, 0.40, 0.60)){

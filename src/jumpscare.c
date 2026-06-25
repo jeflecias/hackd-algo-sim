@@ -29,6 +29,7 @@ void jumpscare_schedule(App *a){
     /* random 30-60s between scares */
     a->scare_at = a->now_ms + rng_range(&a->rng, 30000, 60000);
     a->scare_pending = 0;
+    a->scare_ramped = 0;        /* arm the dread-ramp whisper for the next cycle */
 }
 
 /* ---- puzzle generators: fill question/hint and canonical answer ---- */
@@ -137,7 +138,7 @@ void jumpscare_update(App *a, double dt){
             a->scare.result = 0;
             a->kills += 1;
             strcpy(a->scare.res1, "TOO SLOW.");
-            strcpy(a->scare.res2, "the parasite feeds.");
+            snprintf(a->scare.res2, 64, "%s", story_fail_line(a));
             a->scare.phase = 2; a->scare.phase_time = 0;
             audio_sfx(SFX_WRONG, 0);
         }
@@ -215,7 +216,7 @@ void jumpscare_render(App *a){
         skull_render(fb, fb->w - skull_width_px(fb)/2 - 20, skull_height_px(fb)/2 + 20,
                      (int)(a->scare.phase_time/150), COL_RED);
         int y = fb->h/3;
-        const char *t1 = "SOLVE OR SUFFER";
+        const char *t1 = "SOLVE OR YIELD";
         fb_text(fb, fb->w/2 - (int)strlen(t1)*fb->ch_w/2, y - fb->ch_h*2, t1, COL_RED);
         fb_text(fb, 60, y, a->scare.question, COL_GREEN);
         char hint[160]; snprintf(hint,160,"(hint: %s)", a->scare.hint);

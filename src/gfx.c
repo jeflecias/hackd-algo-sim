@@ -124,6 +124,30 @@ void fb_text(Framebuffer *fb, int x, int y, const char *s, uint32_t c){
     TextOutA(fb->memdc, x, y, s, (int)strlen(s));
 }
 
+/* soft additive red glow (light bleeding through a break behind the screen). Red-biased:
+   strength at the centre, falling to 0 at the rim. Shared by the cracked terminal, the
+   skull's eye sockets, and the reaching hand's backlight. */
+void red_glow(Framebuffer *fb, int cx, int cy, int rad, int strength){
+    if (rad <= 0) return;
+    int x0 = cx-rad < 0 ? 0 : cx-rad, x1 = cx+rad >= fb->w ? fb->w-1 : cx+rad;
+    int y0 = cy-rad < 0 ? 0 : cy-rad, y1 = cy+rad >= fb->h ? fb->h-1 : cy+rad;
+    int r2 = rad*rad;
+    for (int y = y0; y <= y1; y++){
+        uint32_t *row = fb->px + (size_t)y*fb->w;
+        int dy = y-cy;
+        for (int x = x0; x <= x1; x++){
+            int dx = x-cx, d2 = dx*dx+dy*dy;
+            if (d2 > r2) continue;
+            int f = strength * (r2 - d2) / r2;               /* bright centre -> 0 at rim */
+            uint32_t p = row[x];
+            int rr = ((p>>16)&0xFF) + f;        if (rr>255) rr=255;
+            int gg = ((p>>8)&0xFF)  + f/8;      if (gg>255) gg=255;
+            int bb = (p&0xFF)       + f/12;     if (bb>255) bb=255;
+            row[x] = RGB32(rr,gg,bb);
+        }
+    }
+}
+
 void fb_blit_shot(Framebuffer *fb, const uint32_t *shot){
     memcpy(fb->px, shot, (size_t)fb->w * fb->h * 4);
 }

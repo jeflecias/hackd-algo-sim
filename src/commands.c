@@ -11,7 +11,7 @@ static void print_banner(App *a){
     term_print(t, COL_RED,   "| | | | |  _|     / _ \\   | | | | | |     | | | | | |     | ' / ");
     term_print(t, COL_RED,   "| |_| | | |___   / ___ \\  | |_| | | |___  | |_| | | |___  | . \\ ");
     term_print(t, COL_RED,   "|____/  |_____| /_/   \\_\\ |____/  |_____|  \\___/   \\____| |_|\\_\\");
-    term_print(t, COL_DGREEN," ::  k e r n e l   p a r a s i t e   v6.6.6  ::");
+    term_print(t, COL_DGREEN," ::  s w a p   d a e m o n   v4.7.0   the cycle continues  ::");
 }
 
 static void print_help(App *a){
@@ -24,7 +24,7 @@ static void print_help(App *a){
     term_print(t, COL_GREEN, "  edit / data        open the live dataset editor (arrows + type)");
     term_print(t, COL_GREEN, "  data <module> set  edit a dataset from the shell (power users)");
     term_print(t, COL_GREEN, "  selftest          verify algorithms vs textbook results");
-    term_print(t, COL_GREEN, "  exit              terminate the parasite (also ESC)");
+    term_print(t, COL_GREEN, "  exit              yield your frame and bail out (also ESC)");
     term_print(t, COL_AMBER, "MODULE 4 - CPU SCHEDULING");
     term_print(t, COL_GREEN, "  sched fcfs | sjf | srtf | npp | pp | rr [q] | hrrn | mlq | mlfq");
     term_print(t, COL_AMBER, "MODULE 5 - MEMORY MANAGEMENT");
@@ -144,7 +144,7 @@ void cmd_execute(App *a, const char *line){
     } else if (!strcmp(cmd, "selftest")){
         selftest_run(a);
     } else if (!strcmp(cmd, "scare")){          /* debug trigger */
-        term_print(t, COL_RED, "summoning...");
+        term_print(t, COL_RED, "scheduling interrupt...");
         a->scare_at = a->now_ms;                 /* fire ASAP */
     } else if (!strcmp(cmd, "echo")){
         term_print(t, COL_GREEN, "%s", rest);

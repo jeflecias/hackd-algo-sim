@@ -90,28 +90,6 @@ void term_update(App *a, double dt){
 
 static const char *PROMPT = "root@kali:~# ";
 
-/* soft additive red glow (the thing behind the screen, light bleeding through a break) */
-static void red_glow(Framebuffer *fb, int cx, int cy, int rad, int strength){
-    if (rad <= 0) return;
-    int x0 = cx-rad < 0 ? 0 : cx-rad, x1 = cx+rad >= fb->w ? fb->w-1 : cx+rad;
-    int y0 = cy-rad < 0 ? 0 : cy-rad, y1 = cy+rad >= fb->h ? fb->h-1 : cy+rad;
-    int r2 = rad*rad;
-    for (int y = y0; y <= y1; y++){
-        uint32_t *row = fb->px + (size_t)y*fb->w;
-        int dy = y-cy;
-        for (int x = x0; x <= x1; x++){
-            int dx = x-cx, d2 = dx*dx+dy*dy;
-            if (d2 > r2) continue;
-            int f = strength * (r2 - d2) / r2;               /* bright center -> 0 at rim */
-            uint32_t p = row[x];
-            int rr = ((p>>16)&0xFF) + f;        if (rr>255) rr=255;
-            int gg = ((p>>8)&0xFF)  + f/8;      if (gg>255) gg=255;
-            int bb = (p&0xFF)       + f/12;     if (bb>255) bb=255;
-            row[x] = RGB32(rr,gg,bb);
-        }
-    }
-}
-
 /* a jagged crack walking outward from (x,y), with optional corruption bleed */
 static void crack_from(App *a, uint64_t *r, int x, int y, double ang, int segs,
                        int len, uint32_t col, int bleed){
@@ -198,41 +176,94 @@ static void draw_cracks_and_peek(App *a, int rot){
     }
 }
 
-/* a procedural silhouette hand clawing out through the broken screen. Built from solid
-   blocks with a bright red rim so it reads against the glow behind it. `reach` 0..1
-   extends the fingers (animate it to make the hand grasp in and out). */
+/* a tapered "bone": a limb segment that thins from w0 to w1 half-width, filled by stacking
+   perpendicular spans (no polygon fill needed) and edged with a bright rim. The building
+   block for the gaunt reaching hand's fingers and forearm. */
+static void taper_limb(Framebuffer *fb, double x0, double y0, double x1, double y1,
+                       double w0, double w1, uint32_t fill, uint32_t rim){
+    double dx = x1-x0, dy = y1-y0;
+    double len = sqrt(dx*dx + dy*dy); if (len < 1) len = 1;
+    double nx = -dy/len, ny = dx/len;                        /* unit perpendicular */
+    int steps = (int)len;
+    for (int i = 0; i <= steps; i++){
+        double t = (double)i/steps;
+        double mx = x0 + dx*t, my = y0 + dy*t;
+        double hw = w0 + (w1-w0)*t; if (hw < 0.5) hw = 0.5;
+        fb_line(fb, (int)(mx-nx*hw), (int)(my-ny*hw), (int)(mx+nx*hw), (int)(my+ny*hw), fill);
+    }
+    fb_line(fb, (int)(x0-nx*w0), (int)(y0-ny*w0), (int)(x1-nx*w1), (int)(y1-ny*w1), rim);
+    fb_line(fb, (int)(x0+nx*w0), (int)(y0+ny*w0), (int)(x1+nx*w1), (int)(y1+ny*w1), rim);
+}
+
+/* The thing behind the glass forces a gaunt hand through the break and gropes for a frame.
+   A backlit silhouette (dark fill + red rim, seated in red_glow) rather than a blocky glove:
+   a knuckled palm, five fanned fingers that curl when `reach` is low and splay into claws
+   when it's high, and shards of broken screen radiating from the wrist. `reach` 0..1 drives
+   both extension and curl (animate it to make the hand grasp in and out). */
 void draw_reaching_hand(Framebuffer *fb, int cx, int cy, double reach, uint32_t color){
     if (reach < 0) reach = 0;
     if (reach > 1) reach = 1;
     int s = fb->h / 22; if (s < 8) s = 8;
     uint32_t rim = 0x00B00014u;                              /* bright red rim */
+    const double PI = 3.14159265358979;
+    double curl = 1.0 - reach;                               /* low reach -> fingers curl in */
 
-    int palmw = s*5, palmh = s*5;
-    int px = cx - palmw/2, py = cy;
-    /* wrist */
-    fb_fill_rect(fb, cx - s*2, py+palmh - s, s*4, s*4, color);
-    fb_frame   (fb, cx - s*2, py+palmh - s, s*4, s*4, rim);
-    /* palm */
-    fb_fill_rect(fb, px, py, palmw, palmh, color);
-    fb_frame   (fb, px, py, palmw, palmh, rim);
-    /* four fingers reaching up (out of the screen) */
-    int reachpx = (int)(s*5 * reach);
-    int fw = s, gap = s/2;
-    int fx = px + gap;
-    int lengths[4] = { s*4 + s, s*4 + s*2, s*4 + s*2, s*4 + s };  /* middle two longest */
-    for (int i = 0; i < 4; i++){
-        int flen = lengths[i] + reachpx;
-        int fy = py - flen;
-        fb_fill_rect(fb, fx, fy, fw, flen + s, color);      /* overlaps into the palm */
-        fb_frame   (fb, fx, fy, fw, flen, rim);
-        fb_fill_rect(fb, fx, fy - s/2, fw, s/2, rim);       /* claw tip */
-        fx += fw + gap;
+    static unsigned tick = 0; tick++;                        /* self-contained time proxy */
+    double tp = tick * 0.30;
+
+    /* backlight: the break glows from behind so the hand reads as a silhouette */
+    red_glow(fb, cx, cy - s*2, s*6, 24 + (int)(34*reach));
+
+    /* broken-screen shards radiating from the wrist hole (stable per position, no strobe) */
+    unsigned gseed = (unsigned)(cx*131 + cy*17 + 0x9E37u);
+    for (int k = 0; k < 7; k++){
+        gseed = gseed*1664525u + 1013904223u;
+        double a = (2*PI*k)/7 + ((gseed>>9)&63)/255.0;
+        int gl = s*2 + (int)((gseed>>4)&31)/8 * s;
+        fb_line(fb, cx, cy + s, cx + (int)(cos(a)*gl), cy + s + (int)(sin(a)*gl), rim);
     }
-    /* thumb, off the side */
-    int tx = px - s*2, ty = py + s;
-    fb_fill_rect(fb, tx, ty, s*2 + s/2, s*2, color);
-    fb_frame   (fb, tx, ty, s*2 + s/2, s*2, rim);
-    fb_fill_rect(fb, tx - s/2, ty, s/2, s*2, rim);          /* thumb claw */
+
+    /* forearm rising into the palm (widens upward) */
+    taper_limb(fb, cx, cy + s*3, cx, cy - s*0.4, s*1.5, s*2.1, color, rim);
+
+    /* knuckled palm: stacked spans with a rounded profile + gnarled jitter */
+    int ptop = cy - (int)(s*3.2), pbot = cy;
+    unsigned pseed = gseed ^ 0xBEEF;
+    for (int y = ptop; y <= pbot; y++){
+        double t = (double)(y - ptop)/(pbot - ptop + 1);     /* 0 top .. 1 wrist */
+        double hw = s*2.2 * (0.55 + 0.45*sin(t*PI*0.9 + 0.2));
+        pseed = pseed*1103515245u + 12345u;
+        hw += (((pseed>>10)&63)/63.0 - 0.5) * s*0.4;          /* gnarl the silhouette */
+        if (hw < 1) hw = 1;
+        fb_fill_rect(fb, cx - (int)hw, y, (int)(2*hw), 1, color);
+        fb_fill_rect(fb, cx - (int)hw, y, 1, 1, rim);         /* ragged rim edges */
+        fb_fill_rect(fb, cx + (int)hw, y, 1, 1, rim);
+    }
+
+    /* five fingers, fanned from the top of the palm; each has a knuckle bend */
+    double rootY = ptop + s*0.2;
+    /* index, middle, ring, little + thumb: splay angle, length multiplier */
+    double splay[5] = { -0.62, -0.22, 0.18, 0.55, -1.15 };
+    double lenm [5] = {  1.05,  1.30, 1.20, 0.85, 0.80 };
+    double rootK[5] = { -1.5, -0.6, 0.6, 1.5, -2.1 };        /* root x offset in units of s */
+    for (int i = 0; i < 5; i++){
+        double rx = cx + rootK[i]*s;
+        double ry = rootY + (i==4 ? s*1.6 : 0);              /* thumb roots lower on the side */
+        double baseDir = -PI/2 + splay[i]*0.7;
+        double L = s*(2.0 + 2.4*lenm[i]) + reach*s*3.2;
+        double pl = L*0.55, dl = L*0.5;
+        double bend = curl*0.95 + 0.12;                      /* curl the distal segment forward */
+        if (i==4) bend += 0.3;
+        double mx = rx + cos(baseDir)*pl;
+        double my = ry + sin(baseDir)*pl;
+        double ddir = baseDir + bend;
+        double trem = sin(tp + i*1.7) * s*0.18;              /* faint twitch */
+        double tx = mx + cos(ddir)*dl + trem;
+        double ty = my + sin(ddir)*dl;
+        taper_limb(fb, rx, ry, mx, my, s*0.85, s*0.62, color, rim);
+        taper_limb(fb, mx, my, tx, ty, s*0.62, s*0.16, color, rim);
+        fb_fill_rect(fb, (int)tx - 1, (int)ty - 1, 3, 3, rim);   /* claw tip */
+    }
 }
 
 void term_render(App *a){
@@ -243,6 +274,19 @@ void term_render(App *a){
     /* the shell rots as lives are consumed in the other world (0..3) */
     int rot = 3 - a->lives; if (rot < 0) rot = 0; if (rot > 3) rot = 3;
     draw_cracks_and_peek(a, rot);
+
+    /* dread-ramp: in the final stretch before a scheduled scare, a faint skull surfaces
+       from behind the glass and the glow swells. Drawn BEFORE the text so the data stays
+       readable (wreck the chrome, spare the data). */
+    {
+        double tts = a->scare_at - a->now_ms;
+        if (rot < 2 && tts >= 0 && tts < 3000.0){    /* last life already has a permanent skull */
+            double k = 1.0 - tts/3000.0;                    /* 0 -> 1 as the scare nears */
+            red_glow(fb, fb->w/2, fb->h/2, (int)(fb->h/4 * k), (int)(22*k));
+            int v = (int)(0x18 + 0x40*k);
+            skull_render(fb, fb->w/2, fb->h/2, (int)(a->now_ms/150), RGB32(v, 0, v/5));
+        }
+    }
 
     int ch = fb->ch_h;
     int status_h = ch + 10;
@@ -285,7 +329,7 @@ void term_render(App *a){
     fb_fill_rect(fb, 0, fb->h - status_h, fb->w, status_h, 0x00101810);
     char sb[256];
     snprintf(sb, sizeof(sb),
-        " [ DEADLOCK v6.6.6 ]  modules:4-7 loaded  victims:%d  lives:%d  type 'help'  |  ESC=panic-exit",
+        " [ DEADLOCK v4.7 ]  modules:4-7 loaded  swapped-out:%d  lives:%d  type 'help'  |  ESC=panic-exit",
         a->kills, a->lives);
     fb_text(fb, 8, sy, sb, COL_DGREEN);
     /* live-intrusion HUD on the right */
@@ -297,14 +341,22 @@ void term_render(App *a){
         fb_text(fb, fb->w - cw*12, sy, "LIVE INTRUSION", COL_RED);
     }
 
+    /* dread-ramp lifts the chrome decay slightly in the final approach (data stays drawn
+       above this; these are signal-level effects) */
+    double tts_fx = a->scare_at - a->now_ms;
+    int ramp = (tts_fx >= 0 && tts_fx < RAMP_MS) ? (int)(3 * (1.0 - tts_fx/RAMP_MS)) : 0;
+
     /* occasional power flicker / darkness pulse */
-    if ((rng_next(&a->rng) & 1023) < 4) gfx_brightness(fb, 55 + (int)(rng_next(&a->rng)%30));
-    /* lives-scaled decay: signal can't hold as the parasite wins */
-    if (rot >= 1 && (int)(rng_next(&a->rng) & 7) < rot) gfx_rgb_split(fb, rot);
+    if ((rng_next(&a->rng) & 1023) < 4 + ramp*2) gfx_brightness(fb, 55 + (int)(rng_next(&a->rng)%30));
+    /* lives-scaled decay: signal can't hold as the resident pushes through */
+    if ((rot + ramp) >= 1 && (int)(rng_next(&a->rng) & 7) < rot + ramp) gfx_rgb_split(fb, rot + ramp);
     if (rot >= 2) gfx_slice_tear(fb, &a->rng, 10 + rot*8, rot);
     if (rot >= 2 && (int)(rng_next(&a->rng) & 31) < rot) gfx_datamosh(fb, &a->rng, 0, 0, fb->w, fb->h);
-    /* subtle scanlines for CRT feel */
+    /* analog grade: subtle film grain + a CRT vignette darkening the margins (centre, where
+       the data lives, stays bright) + scanlines */
+    gfx_grain(fb, &a->rng, 7);
     gfx_scanlines(fb, 88);
+    gfx_vignette(fb);
 }
 
 /* ----------------- input handling ----------------- */

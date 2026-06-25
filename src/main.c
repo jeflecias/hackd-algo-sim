@@ -18,10 +18,19 @@ static void update(double dt){
     case ST_WELCOME:
         intro_update(a, dt);
         break;
-    case ST_TERMINAL:
+    case ST_TERMINAL: {
+        /* dread-ramp tail: in the last RAMP_MS before the scheduled scare, announce it with
+           one act-appropriate whisper + a held breath, then a wash of static. The drone bed
+           (below) swells over the same window and its heartbeat self-engages. Cadence and the
+           hard auto-fire are untouched. scare_ramped is re-armed in jumpscare_schedule(). */
+        double tts = a->scare_at - a->now_ms;
+        if (!a->busy_anim && tts < RAMP_MS && tts >= 0){
+            if (a->scare_ramped == 0){ a->scare_ramped = 1; story_whisper(a); audio_sfx(SFX_BREATH, 0); }
+            else if (a->scare_ramped == 1 && tts < RAMP_MS*0.4){ a->scare_ramped = 2; audio_sfx(SFX_STATIC, 0.5f); }
+        }
         if (!a->busy_anim && a->now_ms >= a->scare_at)
             jumpscare_trigger(a);          /* deferred automatically while an anim runs */
-        break;
+        break; }
     case ST_ANIM:
         anim_update(a, dt);
         a->scare_at += dt;                 /* freeze the jumpscare countdown */
@@ -56,7 +65,7 @@ static void update(double dt){
         if (a->state == ST_TERMINAL && !a->busy_anim && a->now_ms >= scan_at){
             static const char *FILES[] = {
                 "/home/user/Documents/taxes.pdf", "/home/user/.ssh/id_rsa",
-                "/home/user/Pictures/IMG_0666.jpg", "/home/user/.bash_history",
+                "/home/user/Pictures/IMG_2049.jpg", "/home/user/.bash_history",
                 "/etc/shadow", "/home/user/Desktop/diary.txt", "/home/user/wallet.dat" };
             term_print(&a->term, COL_DGREEN, "[scan] reading %s ... done",
                        FILES[rng_next(&a->rng) % 7]);
@@ -69,7 +78,10 @@ static void update(double dt){
     {
         double lvl = 0.18;
         switch (a->state){
-        case ST_TERMINAL:     lvl = 0.15; break;
+        case ST_TERMINAL: {
+            double tts = a->scare_at - a->now_ms;            /* swell as the scare nears */
+            lvl = (tts < RAMP_MS && tts >= 0) ? 0.15 + 0.55*(1.0 - tts/RAMP_MS) : 0.15;
+            break; }
         case ST_ANIM:         lvl = 0.35; break;
         case ST_DATAEDIT:     lvl = 0.30; break;
         case ST_GLITCH_INTRO:

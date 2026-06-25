@@ -10,6 +10,21 @@
 #include <stdio.h>
 #include <math.h>
 
+/* clamp an identity string to a sane display length so long usernames/hostnames can't
+   blow out the fixed taunt buffers or run off-screen. returns a pointer into a rotating
+   set of static buffers (safe for a few concurrent uses in one snprintf chain). */
+static const char *clip(const char *s){
+    #define CLIP_MAX 20
+    static char buf[4][CLIP_MAX + 4];
+    static int which = 0;
+    char *out = buf[which]; which = (which + 1) & 3;
+    int i = 0;
+    for (; s && s[i] && i < CLIP_MAX; i++) out[i] = s[i];
+    if (s && s[i]){ out[i++] = '.'; out[i++] = '.'; out[i++] = '.'; }
+    out[i] = 0;
+    return out;
+}
+
 static void grab_identity(App *a){
     DWORD n = sizeof(a->fw.user);
     if (!GetUserNameA(a->fw.user, &n) || !a->fw.user[0]) strcpy(a->fw.user, "user");
@@ -72,16 +87,16 @@ static void render_bsod(App *a){
     fb_text(fb, x, y, ":(", COL_WHITE);
     fb_font_base(fb);
     char l[160];
-    fb_text(fb, x, y + ch*3, "Your PC ran into a problem and needs YOU.", COL_WHITE);
-    fb_text(fb, x, y + ch*4, "We're just collecting your soul, and then we'll", COL_WHITE);
-    fb_text(fb, x, y + ch*5, "restart you.", COL_WHITE);
-    snprintf(l, sizeof(l), "collecting your soul: %d%% complete", (int)a->fw.bsod_pct);
+    fb_text(fb, x, y + ch*3, "Your PC ran into a problem and needs YOUR frame.", COL_WHITE);
+    fb_text(fb, x, y + ch*4, "We're just swapping you to disk, and then we'll", COL_WHITE);
+    fb_text(fb, x, y + ch*5, "schedule someone else.", COL_WHITE);
+    snprintf(l, sizeof(l), "swapping you to disk: %d%% complete", (int)a->fw.bsod_pct);
     fb_text(fb, x, y + ch*7, l, COL_WHITE);
     int bw = W/3, by = y + ch*8;
     fb_frame(fb, x, by, bw, ch, COL_WHITE);
     fb_fill_rect(fb, x, by, (int)(bw * a->fw.bsod_pct/100.0), ch, COL_WHITE);
     fb_text(fb, x, y + ch*11, "If you call someone, tell them: YOU ARE THE BUG", COL_WHITE);
-    snprintf(l, sizeof(l), "Stop code: SOUL_NOT_FOUND   host: %s   user: %s", a->fw.host, a->fw.user);
+    snprintf(l, sizeof(l), "Stop code: DEADLOCK_DETECTED   host: %s   user: %s", clip(a->fw.host), clip(a->fw.user));
     fb_text(fb, x, y + ch*13, l, COL_WHITE);
     if (a->fw.phase >= 1) collapse_fx(a, a->fw.t/1300.0);
     gfx_scanlines(fb, 92);
@@ -105,12 +120,12 @@ static void render_update(App *a){
     fb_text_center(fb, cx, cy + R + ch*2, l, COL_WHITE);
     const char *taunt = pct < 40 ? "Don't turn off your PC."
                       : pct < 70 ? "Don't turn off your PC."
-                      : pct < 92 ? "I'm almost inside."
+                      : pct < 92 ? "Almost done writing you to disk."
                                  : "This won't hurt. much.";
     snprintf(l, sizeof(l), "%s", taunt);
     fb_text_center(fb, cx, cy + R + ch*4, l, COL_WHITE);
     if (pct >= 50){
-        snprintf(l, sizeof(l), "preparing %s for the dark...", a->fw.user);
+        snprintf(l, sizeof(l), "paging %s out to /swap...", clip(a->fw.user));
         fb_text_center(fb, cx, cy + R + ch*6, l, COL_WHITE);
     }
     if (a->fw.phase >= 1) collapse_fx(a, a->fw.t/1300.0);
@@ -123,17 +138,18 @@ static void render_panic(App *a){
     fb_clear(fb, 0x00000000);
     int x = 28, y = 24;
     char l[160];
-    fb_text(fb, x, y,           "Kernel panic - not syncing: Attempted to kill YOU", COL_WHITE); y += ch;
-    snprintf(l,sizeof(l),       "CPU: 0 PID: 666 Comm: %s Tainted: G   D", a->fw.user);
+    fb_text(fb, x, y,           "Kernel panic - not syncing: no free frame, must evict YOU", COL_WHITE); y += ch;
+    snprintf(l,sizeof(l),       "CPU: 0 PID: %d Comm: %s Tainted: G   D",
+             1000 + (int)(a->fw.bsod_pct*7) % 9000, clip(a->fw.user));
     fb_text(fb, x, y, l, COL_WHITE); y += ch;
-    snprintf(l,sizeof(l),       "Hardware name: %s", a->fw.host);
+    snprintf(l,sizeof(l),       "Hardware name: %s", clip(a->fw.host));
     fb_text(fb, x, y, l, COL_WHITE); y += ch*2;
     fb_text(fb, x, y,           "Call Trace:", COL_DGREEN); y += ch;
-    fb_text(fb, x, y,           "  [<ffffffff8badf00d>] devour_soul+0x66/0x66", COL_DGREEN); y += ch;
-    fb_text(fb, x, y,           "  [<ffffffffdeadbeef>] consume+0xff/0xff", COL_DGREEN); y += ch;
-    fb_text(fb, x, y,           "  [<ffffffffc0000005>] no_such_exit+0x0/0x0", COL_DGREEN); y += ch;
-    fb_text(fb, x, y,           "  [<00000000000000>] you+0x0/0x0", COL_RED); y += ch*2;
-    snprintf(l,sizeof(l),       "formatting /dev/soul ... %d%%", (int)a->fw.bsod_pct);
+    fb_text(fb, x, y,           "  [<ffffffff8badf00d>] swap_out+0x66/0x66", COL_DGREEN); y += ch;
+    fb_text(fb, x, y,           "  [<ffffffffdeadbeef>] schedule_out+0xff/0xff", COL_DGREEN); y += ch;
+    fb_text(fb, x, y,           "  [<ffffffffc0000005>] no_free_frame+0x0/0x0", COL_DGREEN); y += ch;
+    fb_text(fb, x, y,           "  [<00000000000000>] reap_zombie+0x0/0x0", COL_RED); y += ch*2;
+    snprintf(l,sizeof(l),       "writing /dev/swap ... %d%%", (int)a->fw.bsod_pct);
     fb_text(fb, x, y, l, (int)a->fw.bsod_pct >= 100 ? COL_RED : COL_AMBER); y += ch;
     int bw = fb->w/3;
     fb_frame(fb, x, y, bw, ch, COL_DGREEN);
@@ -152,10 +168,10 @@ static void render_meltdown(App *a){
         if ((rng_next(&a->rng) & 3) == 0) gfx_slice_tear(fb, &a->rng, 30, 3);
         gfx_brightness(fb, 55);
         char l0[96], l1[96], l2[96];
-        snprintf(l0, sizeof(l0), "I SEE YOU, %s.", a->fw.user);
-        snprintf(l1, sizeof(l1), "this is %s.", a->fw.host);
-        snprintf(l2, sizeof(l2), "it's %s. why are you still awake?", a->fw.when);
-        const char *L[4] = { l0, l1, l2, "you failed. now you belong to the machine." };
+        snprintf(l0, sizeof(l0), "I SEE YOU, %s.", clip(a->fw.user));
+        snprintf(l1, sizeof(l1), "this is %s.", clip(a->fw.host));
+        snprintf(l2, sizeof(l2), "it's %s. why are you still resident?", a->fw.when);
+        const char *L[4] = { l0, l1, l2, "you yielded. you're paged out to disk now." };
         int shown = (int)(a->fw.t / 650) + 1; if (shown > 4) shown = 4;
         int y = fb->h/2 - fb->ch_h*4;
         for (int i = 0; i < shown; i++){
@@ -226,7 +242,7 @@ void gameover_render(App *a){
         gfx_rgb_split(fb, 4 + (int)(a->fw.t / 300));
         gfx_brightness(fb, 70);
         char l[160], g[160];
-        snprintf(l, sizeof(l), "there's no more room for you here, %s.", a->fw.user);
+        snprintf(l, sizeof(l), "no more room for you here, %s -- paged out. the next one finds you.", clip(a->fw.user));
         fb_garble(g, l, &a->rng, 15);
         fb_text_center(fb, fb->w/2, fb->h/2, g, COL_RED);
         gfx_scanlines(fb, 80);

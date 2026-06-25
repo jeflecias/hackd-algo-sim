@@ -187,7 +187,8 @@ typedef struct {
     /* jumpscare scheduling */
     double      scare_at;     /* ms (app clock) of next jumpscare */
     int         scare_pending;/* queued because an animation was running */
-    int         kills;        /* cosmetic counter */
+    int         scare_ramped; /* dread-ramp build-up has fired for this scare cycle */
+    int         kills;        /* cosmetic counter (processes swapped out before you) */
     int         lives;        /* lose-sequence lives (start 3); 0 -> ST_GAMEOVER + exit */
 
     /* jumpscare puzzle runtime */
@@ -299,6 +300,7 @@ void gfx_slice_tear(Framebuffer *fb, uint64_t *rng, int amount, int bands);
 void gfx_noise_blocks(Framebuffer *fb, uint64_t *rng, int count, int maxsz);
 void gfx_invert_band(Framebuffer *fb, int y, int h);
 void gfx_vignette(Framebuffer *fb);
+void red_glow(Framebuffer *fb, int cx, int cy, int rad, int strength);  /* additive red backlight */
 /* horror-hacker aesthetic primitives */
 void gfx_phosphor(Framebuffer *fb, int fade);                 /* CRT persistence trail (fade 0..100) */
 void gfx_phosphor_reset(Framebuffer *fb);                     /* drop the trail buffer (on state change) */
@@ -331,6 +333,9 @@ void cmd_execute(App *a, const char *line);
 void intro_update(App *a, double dt);
 void intro_render(App *a);
 
+/* dread build-up tail (ms) before each scheduled scare; shared by main.c + terminal.c */
+#define RAMP_MS 7000.0
+
 /* ---- skull.c ---- */
 void skull_render(Framebuffer *fb, int cx, int cy, int frame, uint32_t color);
 int  skull_width_px(Framebuffer *fb);
@@ -354,6 +359,13 @@ void images_free(ImageSet *set);
 
 /* ---- terminal.c helper: a procedural hand clawing out of the broken screen ---- */
 void draw_reaching_hand(Framebuffer *fb, int cx, int cy, double reach, uint32_t color);
+
+/* ---- story.c: the deadlock/swap narrative spine, act-gated on a->lives ----
+   act 0 (lives 3): "something was here"   act 1 (lives 2): "the previous victim"
+   act 2 (lives <=1): "you become the next" */
+int         story_act(App *a);                 /* 0..2 derived from lives */
+void        story_whisper(App *a);             /* print one act fragment to the shell */
+const char *story_fail_line(App *a);           /* act-flavoured jumpscare-fail subtitle */
 
 /* ---- jumpscare.c ---- */
 void jumpscare_schedule(App *a);

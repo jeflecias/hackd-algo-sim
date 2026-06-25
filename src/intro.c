@@ -10,13 +10,15 @@ static void enter_boot(App *a){
     uint64_t *r = &a->rng;
     term_clear(&a->term);
     Terminal *t = &a->term;
-    term_queue(t, 60,  COL_GREEN, "[ booting parasite kernel module ............ ]");
-    term_queue(t, 120, COL_GREEN, "[OK] mapping /dev/mem");
-    term_queue(t, 90,  COL_GREEN, "[OK] hooking syscall table @ 0x%08X", rng_next(r));
-    term_queue(t, 90,  COL_GREEN, "[OK] disabling kernel write-protect (CR0)");
-    term_queue(t, 130, COL_AMBER, "[**] scanning ready queue for live processes...");
+    int prev_pid = rng_range(r,1000,9999);
+    term_queue(t, 60,  COL_GREEN, "[ swap daemon: faulting in stale process image ... ]");
+    term_queue(t, 120, COL_GREEN, "[OK] mounting /dev/swap");
+    term_queue(t, 90,  COL_GREEN, "[OK] reading /swap/%04d  (image @ 0x%08X)", prev_pid&0xFFF, rng_next(r));
+    term_queue(t, 90,  COL_AMBER, "[**] previous tenant: pid %d  state Z (zombie, unreaped)", prev_pid);
+    term_queue(t, 130, COL_RED,   "[!!] deadlock detected: pid %d held R%d, waited R%d -- circular wait",
+               prev_pid, rng_range(r,1,7), rng_range(r,1,7));
     for (int i = 0; i < 6; i++)
-        term_queue(t, 70, COL_DGREEN, "    pid %-5d  inject payload ... done  rss=%dK",
+        term_queue(t, 70, COL_DGREEN, "    frame %-5d  page in ... done  rss=%dK",
                    rng_range(r,200,9999), rng_range(r,64,8192));
     term_queue(t, 120, COL_GREEN, "[OK] page table walk complete  frames=%d", rng_range(r,128,2048));
     /* randomized infection lines so each boot differs */
@@ -47,7 +49,8 @@ static void enter_boot(App *a){
                rng_range(r,10,250),rng_range(r,0,255),rng_range(r,0,255),rng_range(r,1,254),
                rng_range(r,1024,65000));
     term_queue(t, 110, COL_AMBER, "[**] installing persistence (cron + registry) ...");
-    term_queue(t, 90,  COL_GREEN, "[OK] handing control to interactive shell");
+    term_queue(t, 110, COL_RED,   "[!!] only one free frame: a resident must be swapped out to seat you");
+    term_queue(t, 90,  COL_GREEN, "[OK] re-scheduling -- handing control to interactive shell");
     term_queue(t, 600, COL_RED,   " ");
 }
 
@@ -60,10 +63,10 @@ static void enter_welcome(App *a){
     term_queue(t, 40,  COL_RED,   "| | | | |  _|     / _ \\   | | | | | |     | | | | | |     | ' / ");
     term_queue(t, 40,  COL_RED,   "| |_| | | |___   / ___ \\  | |_| | | |___  | |_| | | |___  | . \\ ");
     term_queue(t, 40,  COL_RED,   "|____/  |_____| /_/   \\_\\ |____/  |_____|  \\___/   \\____| |_|\\_\\");
-    term_queue(t, 220, COL_DGREEN," ::  k e r n e l   p a r a s i t e   v6.6.6  ::");
+    term_queue(t, 220, COL_DGREEN," ::  s w a p   d a e m o n   v4.7.0   the cycle continues  ::");
     term_queue(t, 150, COL_CYAN,  "");
-    term_queue(t, 120, COL_DGREEN,"Linux kali 6.6.6-parasite #1 SMP PREEMPT_DYNAMIC x86_64 GNU/Linux");
-    term_queue(t, 90,  COL_DGREEN,"Last login: never -- you were already inside.");
+    term_queue(t, 120, COL_DGREEN,"Linux kali 4.7.0-deadlock #1 SMP PREEMPT_DYNAMIC x86_64 GNU/Linux");
+    term_queue(t, 90,  COL_DGREEN,"Last login: never -- the last process never logged out.");
     term_queue(t, 120, COL_CYAN,  "WELCOME, root. You are trapped inside a fake shell.");
     term_queue(t, 90,  COL_GREEN, "The only way out is to RUN its algorithms (OS Modules 4-7):");
     term_queue(t, 70,  COL_AMBER, "  sched  fcfs sjf srtf npp pp rr [q] hrrn mlq mlfq");
@@ -72,8 +75,8 @@ static void enter_welcome(App *a){
     term_queue(t, 70,  COL_AMBER, "  disk   fcfs sstf scan cscan look clook [start]");
     term_queue(t, 90,  COL_GREEN, "  edit | data <module>   tweak datasets     man <algo>   read theory");
     term_queue(t, 70,  COL_GREEN, "  selftest   verify vs textbook      banner | clear | help [topic]");
-    term_queue(t, 120, COL_RED,   "WARNING: every 30-60 seconds the skull returns with a 30s test.");
-    term_queue(t, 90,  COL_RED,   "         fail it and you're dragged out of the machine.");
+    term_queue(t, 120, COL_RED,   "WARNING: every 30-60 seconds the scheduler interrupts with a timed test.");
+    term_queue(t, 90,  COL_RED,   "         fail it and you yield your frame -- swapped out of the machine.");
     term_queue(t, 150, COL_CYAN,  "Type 'help' to begin.  (ESC = panic exit)");
     term_queue(t, 200, COL_GREEN, "");
 }
@@ -159,7 +162,7 @@ void intro_render(App *a){
         uint32_t col = ((frame & 1)) ? COL_RED : COL_WHITE;
         if (a->state_time < 200) col = COL_WHITE;
         skull_render(fb, fb->w/2, fb->h/2, frame, col);
-        const char *laugh = "H A   H A   H A   H A";
+        const char *laugh = "S W A P P E D   O U T";
         int x = fb->w/2 - (int)strlen(laugh)*fb->ch_w/2;
         fb_text(fb, x, fb->h/2 + skull_height_px(fb)/2 + fb->ch_h, laugh, COL_RED);
         if ((rng_next(&a->rng) & 3) == 0) gfx_slice_tear(fb, &a->rng, 24, 3);
