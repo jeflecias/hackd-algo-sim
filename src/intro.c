@@ -69,14 +69,25 @@ static void enter_welcome(App *a){
     term_queue(t, 90,  COL_DGREEN,"Last login: never -- the last process never logged out.");
     term_queue(t, 120, COL_CYAN,  "WELCOME, root. You are trapped inside a fake shell.");
     term_queue(t, 90,  COL_GREEN, "The only way out is to RUN its algorithms (OS Modules 4-7):");
-    term_queue(t, 70,  COL_AMBER, "  sched  fcfs sjf srtf npp pp rr [q] hrrn mlq mlfq");
-    term_queue(t, 70,  COL_AMBER, "  mem    firstfit bestfit worstfit bestavail paging swap");
-    term_queue(t, 70,  COL_AMBER, "  vmem   fifo opt lru belady lfu mfu second eat");
-    term_queue(t, 70,  COL_AMBER, "  disk   fcfs sstf scan cscan look clook [start]");
-    term_queue(t, 90,  COL_GREEN, "  edit | data <module>   tweak datasets     man <algo>   read theory");
-    term_queue(t, 70,  COL_GREEN, "  selftest   verify vs textbook      banner | clear | help [topic]");
-    term_queue(t, 120, COL_RED,   "WARNING: every 30-60 seconds the scheduler interrupts with a timed test.");
-    term_queue(t, 90,  COL_RED,   "         fail it and you yield your frame -- swapped out of the machine.");
+    /* same command list as the 'help' command (print_help in commands.c) */
+    term_queue(t, 90,  COL_CYAN,  "AVAILABLE COMMANDS");
+    term_queue(t, 55,  COL_GREEN, "  help [topic]      this menu  (topics: sched mem vmem disk)");
+    term_queue(t, 55,  COL_GREEN, "  man <algo>        explain an algorithm / concept");
+    term_queue(t, 55,  COL_GREEN, "  banner            redraw the logo");
+    term_queue(t, 55,  COL_GREEN, "  clear             wipe the screen");
+    term_queue(t, 55,  COL_GREEN, "  edit / data        open the live dataset editor (arrows + type)");
+    term_queue(t, 55,  COL_GREEN, "  data <module> set  edit a dataset from the shell (power users)");
+    term_queue(t, 55,  COL_GREEN, "  selftest          verify algorithms vs textbook results");
+    term_queue(t, 55,  COL_GREEN, "  exit              yield your frame and bail out (also ESC)");
+    term_queue(t, 70,  COL_AMBER, "MODULE 4 - CPU SCHEDULING");
+    term_queue(t, 55,  COL_GREEN, "  sched fcfs | sjf | srtf | npp | pp | rr [q] | hrrn | mlq | mlfq");
+    term_queue(t, 70,  COL_AMBER, "MODULE 5 - MEMORY MANAGEMENT");
+    term_queue(t, 55,  COL_GREEN, "  mem firstfit | bestfit | worstfit | bestavail | paging | swap");
+    term_queue(t, 70,  COL_AMBER, "MODULE 6 - VIRTUAL MEMORY");
+    term_queue(t, 55,  COL_GREEN, "  vmem fifo | opt | lru | belady | lfu | mfu | second | eat");
+    term_queue(t, 70,  COL_AMBER, "MODULE 7 - MASS STORAGE");
+    term_queue(t, 55,  COL_GREEN, "  disk fcfs | sstf | scan | cscan | look | clook  [start]");
+    term_queue(t, 90,  COL_DGREEN,"tip: try 'sched rr 2' or 'disk scan 53'  -- mind the skull.");
     term_queue(t, 150, COL_CYAN,  "Type 'help' to begin.  (ESC = panic exit)");
     term_queue(t, 200, COL_GREEN, "");
 }

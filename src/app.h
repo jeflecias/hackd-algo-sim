@@ -188,6 +188,7 @@ typedef struct {
     double      scare_at;     /* ms (app clock) of next jumpscare */
     int         scare_pending;/* queued because an animation was running */
     int         scare_ramped; /* dread-ramp build-up has fired for this scare cycle */
+    int         scare_return; /* AppState to return to after a scare (terminal or open module) */
     int         kills;        /* cosmetic counter (processes swapped out before you) */
     int         lives;        /* lose-sequence lives (start 3); 0 -> ST_GAMEOVER + exit */
 
@@ -253,6 +254,8 @@ typedef struct {
         double   hp;          /* player health (starts 50); 0 -> catch-jumpscare + lose a life */
         double   hit_cd;      /* ms until the monster can damage again (1/sec) */
         double   hurt_t;      /* ms left of the red on-hit corruption flash */
+        double   gaze;        /* ms spent looking right at the monster (LOS); builds corruption */
+        double   dread;       /* 0..1 combined stare/proximity dread (darkness + drone level) */
     } world;
 } App;
 

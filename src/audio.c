@@ -17,6 +17,7 @@
 typedef struct {
     int      active, wave;     /* wave: 0 sine 1 square 2 saw 3 noise 4 tri */
     double   phase, freq, freq2, t, dur, amp, atk, rel;
+    double   lp, cut;          /* one-pole lowpass state + coeff (0 = bypass) -> colored noise */
     unsigned rng;
 } Voice;
 
@@ -30,23 +31,36 @@ static unsigned  aseed = 0x13572468u;
 /* drone / heartbeat state */
 static double dr_t = 0, dr_tgt = 0;
 static double dph1 = 0, dph2 = 0, dph3 = 0, dlfo = 0, hbt = 0, dbr = 0;
+static double dphsub = 0, dr_hisslp = 0;   /* sub-bass phase + low-passed hiss bed state */
 static unsigned hiss_rng = 0x2468ace0u;
 static double mute_ms = 0;   /* hard-mute countdown for sudden-silence stings */
+
+/* short feedback delay line -> a cavernous Otherworld reverb tail on the master mix */
+#define REV_LEN 4096          /* ~185 ms at 22050 Hz */
+static float  rev_buf[REV_LEN];
+static int    rev_pos = 0;
+static double rev_lp = 0;
 
 static double frand(unsigned *s){
     unsigned x = *s; x ^= x<<13; x ^= x>>17; x ^= x<<5; *s = x;
     return (double)((int)x) / 2147483648.0;   /* ~ -1..1 */
 }
 
-static void spawn(int wave,double f,double f2,double dur,double amp,
-                  double atk,double rel,double delay){
+static void spawnf(int wave,double f,double f2,double dur,double amp,
+                   double atk,double rel,double delay,double cut){
     int idx = -1;
     for(int i=0;i<NVOICE;i++) if(!voices[i].active){ idx=i; break; }
     if(idx<0){ double mx=-1e9; for(int i=0;i<NVOICE;i++) if(voices[i].t>mx){ mx=voices[i].t; idx=i; } }
     Voice *v=&voices[idx];
     v->active=1; v->wave=wave; v->phase=0; v->freq=f; v->freq2=f2;
     v->t=-delay; v->dur=dur; v->amp=amp; v->atk=atk; v->rel=rel;
+    v->lp=0; v->cut=cut;
     aseed += 0x9E3779B9u; v->rng = aseed | 1u;
+}
+/* unfiltered spawn (cut=0): the bright original timbre, used by most blips */
+static void spawn(int wave,double f,double f2,double dur,double amp,
+                  double atk,double rel,double delay){
+    spawnf(wave,f,f2,dur,amp,atk,rel,delay,0.0);
 }
 
 static double oscv(Voice *v){
@@ -89,7 +103,12 @@ static double drone(double dt){
     }
     dbr+=dt/4.0; if(dbr>=1)dbr-=1;         /* ~4s breathing cycle */
     double breath=sin(TAU*dbr)*0.5+0.5;
-    s += frand(&hiss_rng)*(0.006+0.022*breath*ten);  /* breath-modulated hiss bed */
+    double hiss=frand(&hiss_rng);
+    dr_hisslp += 0.08*(hiss-dr_hisslp);    /* low room-rumble bed, not bright white hiss */
+    s += dr_hisslp*(0.03+0.12*breath*ten);
+
+    dphsub += 33.0*dt; if(dphsub>=1)dphsub-=1;        /* ~33 Hz sub-bass: the floor of dread */
+    s += sin(TAU*dphsub)*(0.035+0.10*ten);
 
     /* heartbeat: faster as tension rises */
     hbt += dt;
@@ -112,13 +131,23 @@ static double render_sample(double dt){
         double f=v->freq;
         if(v->freq2>0) f=v->freq+(v->freq2-v->freq)*(v->t/v->dur);
         v->phase+=f*dt; while(v->phase>=1) v->phase-=1;
-        mix += oscv(v)*envv(v);
+        double s=oscv(v);
+        if(v->cut>0){ v->lp += v->cut*(s - v->lp); s=v->lp; }   /* one-pole LP -> colored noise/body */
+        mix += s*envv(v);
         v->t+=dt;
         if(v->t>=v->dur) v->active=0;
     }
     mix += drone(dt);
-    mix = mix/(1.0+0.4*fabs(mix));        /* soft clip */
-    return mix;
+
+    /* cavernous tail: feed the mix through a short, darkened feedback delay */
+    double wet = rev_buf[rev_pos];
+    rev_lp += 0.35*(wet - rev_lp);                  /* lowpass the tail so it doesn't hiss */
+    double out = mix + 0.30*rev_lp;
+    rev_buf[rev_pos] = (float)(mix + 0.42*rev_lp);  /* feedback (decays) */
+    if(++rev_pos >= REV_LEN) rev_pos = 0;
+
+    out = out/(1.0+0.4*fabs(out));        /* soft clip */
+    return out;
 }
 
 static void fill(short *b){
@@ -244,16 +273,17 @@ void audio_sfx(int id, float param){
         for(int i=0;i<6;i++)
             spawn(1,800+i*220,0,0.03,0.05,0.001,0.02,i*0.04);
         break;
-    case SFX_BREATH:                     /* slow filtered-noise inhale/exhale */
-        spawn(3,0,0,2.0,0.045,0.85,0.95,0);
+    case SFX_BREATH:                     /* slow inhale/exhale: low-passed noise -> breathy body, not hiss */
+        spawnf(3,0,0,2.0,0.060,0.85,0.95,0, 0.10);
         break;
     case SFX_DRIP:                       /* sparse sine pluck in the quiet */
         spawn(0,720,560,0.12,0.09,0.002,0.10,0);
         spawn(0,300,0,0.16,0.05,0.002,0.13,0.01);
         break;
-    case SFX_WHISPER:                    /* voice-like filtered-noise burst */
-        spawn(3,0,0,0.50,0.05,0.15,0.22,0);
-        spawn(3,0,0,0.36,0.035,0.10,0.18,0.12);
+    case SFX_WHISPER:                    /* voice-like burst: band-limited noise + a breathy edge */
+        spawnf(3,0,0,0.50,0.070,0.15,0.22,0,    0.18);
+        spawnf(3,0,0,0.36,0.050,0.10,0.18,0.12, 0.12);
+        spawn (1,3000,0,0.04,0.012,0.02,0.03,0.06);   /* faint sibilant edge so it reads as a voice */
         break;
     case SFX_SCAN:                       /* creepy rising scanning ticks */
         for(int i=0;i<5;i++)
@@ -264,11 +294,12 @@ void audio_sfx(int id, float param){
         spawn(0,55,40,0.16,0.26,0.004,0.12,0.16);   /* dub */
         spawn(3,0,0,0.05,0.06,0.002,0.04,0.00);     /* tiny body thud */
         break;
-    case SFX_SCREAM:                     /* corrupted scream: detuned saw fall + screech + noise */
-        spawn(2,540,150,0.55,0.20,0.01,0.30,0);
-        spawn(2,560,160,0.55,0.16,0.01,0.30,0);     /* detune -> ugly beat */
-        spawn(0,1700,420,0.45,0.12,0.01,0.28,0.02); /* ring-mod-ish screech sweep */
-        spawn(3,0,0,0.55,0.20,0.02,0.40,0);         /* breathy noise body */
+    case SFX_SCREAM:                     /* corrupted scream: detuned saw fall + screech + filtered body */
+        spawn (2,540,150,0.55,0.20,0.01,0.30,0);
+        spawn (2,560,160,0.55,0.16,0.01,0.30,0);     /* detune -> ugly beat */
+        spawn (0,1700,420,0.45,0.12,0.01,0.28,0.02); /* ring-mod-ish screech sweep */
+        spawnf(3,0,0,0.55,0.22,0.02,0.40,0,    0.20);/* filtered breathy body (chest, not white hiss) */
+        spawnf(3,0,0,0.40,0.14,0.02,0.34,0.03, 0.05);/* low growl rumble under it */
         break;
     case SFX_SIREN:                      /* Silent Hill air-raid wail (slow up then down) */
         spawn(0,300,560,1.8,0.16,0.5,0.9,0.0);      /* rise  */
@@ -276,10 +307,10 @@ void audio_sfx(int id, float param){
         spawn(0,560,300,1.8,0.15,0.6,1.2,1.8);      /* fall  */
         spawn(0,560,300,1.8,0.10,0.6,1.2,1.8);
         break;
-    case SFX_STATIC:                     /* radio static crackle (the monster is near) */
-        spawn(3,0,0,0.12,0.07+0.10*param,0.003,0.08,0.0);
-        spawn(3,0,0,0.08,0.05+0.08*param,0.002,0.06,0.05);
-        spawn(1,5200,0,0.015,0.03*param,0.001,0.008,0.0);   /* hiss tick */
+    case SFX_STATIC:                     /* radio crackle (monster near): band-limited, with weight */
+        spawnf(3,0,0,0.14,0.06+0.10*param,0.003,0.09,0.0,  0.30); /* mid-body crackle */
+        spawnf(3,0,0,0.10,0.05+0.07*param,0.002,0.07,0.04, 0.06); /* low rumble underneath it */
+        spawn (1,5200,0,0.012,0.02*param,0.001,0.007,0.02);       /* sparse hiss tick on top */
         break;
     default: break;
     }

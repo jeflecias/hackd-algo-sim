@@ -21,7 +21,8 @@
 #define GEN_H    21
 #define LW       ((GEN_W-1)/3)   /* logical rooms across (each -> 2x2 open room)       */
 #define LH       ((GEN_H-1)/3)   /* logical rooms down                                  */
-#define MAXVIEW  5.0         /* cells before the fog swallows it (Silent Hill short draw dist) */
+#define MAXVIEW  4.0         /* cells before the fog swallows it (Cry of Fear short draw dist) */
+#define GAZE_MAX 4000.0      /* ms of unbroken eye-contact for full stare-corruption */
 #define MAXCOL   8192        /* per-column wall depth buffer          */
 
 /* ---- runtime maze state (rebuilt each world_enter) ---- */
@@ -42,6 +43,7 @@ static int  g_nmsg = 0;
 static ImageSet g_imgs;
 static int      g_imgs_tried = 0;
 static double   g_static_t = 0;     /* radio-static cadence (shrinks as the monster nears) */
+static int      g_gaze_stage = 0;   /* which stare audio-cue has fired (0 none, 1 whisper, 2 breath) */
 
 #define TAG_PLAIN 0
 #define TAG_MSG   1
@@ -53,6 +55,20 @@ static int is_wall(int ix, int iy){
     return g_grid[iy][ix] == '#';
 }
 static int blocked(double x, double y){ return is_wall((int)x, (int)y); }
+
+/* true if nothing solid sits on the segment (x0,y0)->(x1,y1): "are you ACTUALLY looking at
+   it, or is there a wall between you?". Marched in ~0.05-cell steps (cheap at MAXVIEW range). */
+static int los_clear(double x0, double y0, double x1, double y1){
+    double dx = x1-x0, dy = y1-y0;
+    double dist = sqrt(dx*dx + dy*dy);
+    int steps = (int)(dist/0.05) + 1;
+    double sx = dx/steps, sy = dy/steps, x = x0, y = y0;
+    for (int i = 0; i < steps; i++){
+        x += sx; y += sy;
+        if (is_wall((int)x, (int)y)) return 0;
+    }
+    return 1;
+}
 
 static unsigned hashu(unsigned x){
     x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16;
@@ -83,7 +99,7 @@ static Framebuffer *lo_target(Framebuffer *fb){
 static int ifloor(double x){ int i = (int)x; return (x < 0 && (double)i != x) ? i-1 : i; }
 
 /* ---- small color helpers (fog + shading) ---- */
-#define FOG_COLOR 0x0014180Fu                /* murky gray-green the distance fades into */
+#define FOG_COLOR 0x000A0D08u                /* near-black murky green the distance dissolves into */
 static uint32_t scale_rgb(uint32_t c, double f){
     int r=(int)(((c>>16)&0xFF)*f), g=(int)(((c>>8)&0xFF)*f), b=(int)((c&0xFF)*f);
     r = r<0?0:(r>255?255:r);
@@ -348,7 +364,8 @@ void world_enter(App *a){
     a->world.mouse_ready = 0;
     a->world.mpath_t = 0;
     a->world.hp = 50; a->world.hit_cd = 0; a->world.hurt_t = 0;
-    g_static_t = 0;
+    a->world.gaze = 0; a->world.dread = 0;
+    g_static_t = 0; g_gaze_stage = 0;
     a->world.pcellx = g_spawn_x; a->world.pcelly = g_spawn_y;
     rebuild_path(g_spawn_x, g_spawn_y);
     gfx_phosphor_reset(&a->fb);
@@ -469,6 +486,31 @@ void world_update(App *a, double dt){
 
         double dx = a->world.px - a->world.mx, dy = a->world.py - a->world.my;
         double pdist2 = dx*dx + dy*dy;
+
+        /* stare-dread: corruption builds ONLY while you're actually looking at the monster
+           (it's centered in view AND nothing solid is between you), and unwinds when you look
+           away. Proximity dread builds even through walls -- "when the monster goes near". */
+        {
+            double d = sqrt(pdist2);
+            double da = atan2(-dy, -dx) - a->world.dir;   /* bearing to monster, rel. to gaze */
+            while (da >  PI) da -= 2*PI;
+            while (da < -PI) da += 2*PI;
+            int looking = (d < MAXVIEW + 0.5) && (fabs(da) < 0.40)
+                          && los_clear(a->world.px, a->world.py, a->world.mx, a->world.my);
+            if (looking) a->world.gaze += dt;
+            else         a->world.gaze -= 3.0*dt;          /* resets quickly once eye contact breaks */
+            if (a->world.gaze < 0)        a->world.gaze = 0;
+            if (a->world.gaze > GAZE_MAX) a->world.gaze = GAZE_MAX;
+            double gz = a->world.gaze / GAZE_MAX;
+
+            /* a whisper as the stare deepens, a held breath as it maxes out -- once each */
+            if (gz > 0.50 && g_gaze_stage < 1){ g_gaze_stage = 1; audio_sfx(SFX_WHISPER, 0); }
+            if (gz > 0.85 && g_gaze_stage < 2){ g_gaze_stage = 2; audio_sfx(SFX_BREATH, 0); }
+            if (gz < 0.40) g_gaze_stage = 0;               /* re-arm after you break away */
+
+            double prox = 1.0 - d/6.0; if (prox < 0) prox = 0; if (prox > 1) prox = 1;
+            a->world.dread = gz > prox ? gz : prox;
+        }
 
         /* radio static: crackles faster the closer the monster is (Silent Hill radio) */
         g_static_t -= dt;
@@ -993,10 +1035,29 @@ void world_render(App *a){
         }
     }
 
-    /* ---- Silent Hill grade on the low-res buffer (cheap: small buffer) ---- */
+    /* ---- Silent Hill / Cry of Fear grade on the low-res buffer (cheap: small buffer) ---- */
+    double dread = a->world.dread;                 /* 0..1 stare-or-proximity */
+    double gz    = a->world.gaze / GAZE_MAX;       /* 0..1 how long you've stared */
     gfx_bloom(fb, 150, 50);                  /* faint green glow */
-    gfx_desaturate(fb, 55);                  /* muted, sickly palette */
+    gfx_desaturate(fb, 55 + (int)(35*dread)); /* palette drains to ash as dread rises */
     gfx_dither(fb);                          /* PS1 banded gradients */
+
+    /* the world drowns in dark as the monster nears OR as you keep staring -- guides included */
+    if (dread > 0.02){
+        int dim = 100 - (int)(60*dread); if (dim < 35) dim = 35;
+        gfx_brightness(fb, dim);
+    }
+    /* stare-corruption: the longer you look right at it, the more the signal breaks up
+       (channel split, datamosh, tearing). Unwinds automatically as a->world.gaze decays. */
+    if (gz > 0.05){
+        gfx_rgb_split(fb, (int)(gz*7));
+        if (gz > 0.3){
+            int cw = (int)(Wd*(0.3 + 0.5*gz)), cx0 = (Wd-cw)/2;
+            gfx_datamosh(fb, &a->rng, cx0, H/4, cw, H/2);
+        }
+        if ((rng_next(&a->rng) & 63) < (int)(gz*30)) gfx_slice_tear(fb, &a->rng, (int)(8+gz*18), 3);
+    }
+
     int tension = a->world.monster_on ? 3 : 1;
     if ((rng_next(&a->rng) & 2047) < tension) gfx_brightness(fb, 72 + (int)(rng_next(&a->rng)%22));
     if (a->world.monster_on && (rng_next(&a->rng) & 255) < 2) gfx_slice_tear(fb, &a->rng, 6, 2);
@@ -1005,8 +1066,9 @@ void world_render(App *a){
         if (mdx*mdx+mdy*mdy < 9.0 && (rng_next(&a->rng)&63) < 7)
             gfx_brightness(fb, 22 + (int)(rng_next(&a->rng)%28));
     }
-    gfx_grain(fb, &a->rng, 8);               /* heavier film grain */
+    gfx_grain(fb, &a->rng, 8 + (int)(10*dread)); /* grain thickens with dread */
     gfx_vignette(fb);                        /* tunnel-vision dark edges */
+    if (dread > 0.5) gfx_vignette(fb);       /* second pass closes the tunnel as dread peaks */
 
     /* ---- blow the low-res world up to the real screen ---- */
     fb_upscale(real, fb->px, Wd, H);

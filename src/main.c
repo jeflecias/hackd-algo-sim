@@ -33,7 +33,11 @@ static void update(double dt){
         break; }
     case ST_ANIM:
         anim_update(a, dt);
-        a->scare_at += dt;                 /* freeze the jumpscare countdown */
+        /* freeze the countdown only while the algorithm sequence is still playing; once it
+           finishes or is skipped (phase 2) the cooldown resumes and a scare can fire from the
+           open module -- surviving it returns you to this same module (see jumpscare.c). */
+        if (a->anim.phase < 2)              a->scare_at += dt;
+        else if (a->now_ms >= a->scare_at)  jumpscare_trigger(a);
         break;
     case ST_DATAEDIT:
         dataedit_update(a, dt);            /* freezes the countdown itself */
@@ -93,7 +97,7 @@ static void update(double dt){
                 : 0.85;
             break;
         case ST_FOURTHWALL: lvl = 0.62; break;
-        case ST_WORLD:      lvl = a->world.monster_on ? 0.88 : 0.50; break;
+        case ST_WORLD:      lvl = 0.45 + 0.50 * a->world.dread; break;  /* swells with stare/proximity dread */
         case ST_GAMEOVER:   lvl = 0.92; break;
         default: lvl = 0.20; break;
         }

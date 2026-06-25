@@ -104,6 +104,7 @@ static void gen_puzzle(App *a){
 }
 
 void jumpscare_trigger(App *a){
+    a->scare_return = a->state;   /* return here on survive (shell, or the open module) */
     a->state = ST_JUMPSCARE;
     a->state_time = 0;
     a->scare.phase = 0;
@@ -145,7 +146,8 @@ void jumpscare_update(App *a, double dt){
     } else { /* phase 2: result */
         if (a->scare.phase_time > RESULT_PHASE_MS){
             if (a->scare.result){
-                a->state = ST_TERMINAL;
+                /* back to wherever the scare interrupted: the shell, or the open module */
+                a->state = (a->scare_return == ST_ANIM) ? ST_ANIM : ST_TERMINAL;
                 a->state_time = 0;
                 jumpscare_schedule(a);
                 term_print(&a->term, COL_GREEN, "[survived the skull -- continue]");
